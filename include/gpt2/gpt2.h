@@ -40,7 +40,7 @@ typedef struct
 
 typedef struct
 {
-    tensor_t *qkv_w;  // (3*h, h)
+    tensor_t *qkv_w;  // (h, 3*h)
     tensor_t *qkv_b;  // (3*h)
     tensor_t *proj_w; // (h, h)
     tensor_t *proj_b; // (h)
@@ -48,9 +48,9 @@ typedef struct
 
 typedef struct
 {
-    tensor_t *fc_w;   // (4*h, h)
+    tensor_t *fc_w;   // (h, 4*h)
     tensor_t *fc_b;   // (4*h)
-    tensor_t *proj_w; // (h, 4*h)
+    tensor_t *proj_w; // (4*h, h)
     tensor_t *proj_b; // (h)
 } ffn_t;
 

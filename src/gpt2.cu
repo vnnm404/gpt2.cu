@@ -27,7 +27,7 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
         if (block->ln_1.b == NULL) return -1;
 
         // attn
-        int shape_qkv_w[] = {3 * config->n_embd, config->n_embd};
+        int shape_qkv_w[] = {config->n_embd, 3 * config->n_embd};
         block->attn.qkv_w = tensor_alloc(2, shape_qkv_w);
         if (block->attn.qkv_w == NULL) return -1;
         int shape_qkv_b[] = {3 * config->n_embd};
@@ -47,13 +47,13 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
         if (block->ln_2.b == NULL) return -1;
 
         // mlp
-        int shape_fc_w[] = {4 * config->n_embd, config->n_embd};
+        int shape_fc_w[] = {config->n_embd, 4 * config->n_embd};
         block->mlp.fc_w = tensor_alloc(2, shape_fc_w);
         if (block->mlp.fc_w == NULL) return -1;
         int shape_fc_b[] = {4 * config->n_embd};
         block->mlp.fc_b = tensor_alloc(1, shape_fc_b);
         if (block->mlp.fc_b == NULL) return -1;
-        int shape_mlp_proj_w[] = {config->n_embd, 4 * config->n_embd};
+        int shape_mlp_proj_w[] = {4 * config->n_embd, config->n_embd};
         block->mlp.proj_w = tensor_alloc(2, shape_mlp_proj_w);
         if (block->mlp.proj_w == NULL) return -1;
         int shape_mlp_proj_b[] = {config->n_embd};

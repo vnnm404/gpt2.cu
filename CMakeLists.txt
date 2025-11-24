@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.18)
-project(gpt2_cuda LANGUAGES C CUDA)
+project(gpt2_cuda LANGUAGES C CXX CUDA)
 
 set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CUDA_STANDARD 11)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
