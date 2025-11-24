@@ -21,6 +21,23 @@ int main() {
         return -1;
     }
     printf("Model initialized successfully\n");
+
+    FILE *file = fopen("../models/gpt2-124M-weights.bin", "rb");
+    if (file == NULL) {
+        fprintf(stderr, "Failed to open weights file: %s\n", "../models/gpt2-124M-weights.bin");
+        return -1;
+    }
+
+    // Load weights
+    if (gpt2_load_weights(&model, file) != 0) {
+        fprintf(stderr, "Failed to load GPT-2 weights\n");
+
+        gpt2_free(&model);
+        fclose(file);
+        return -1;
+    }
+
     gpt2_free(&model);
+    fclose(file);
     return 0;
 }

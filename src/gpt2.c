@@ -8,7 +8,7 @@
 
 int gpt2_initialize(gpt2_t *model, const config_t *config) {
     // emb
-    int shape_wte[] = {config->padded_vocab_size, config->n_embd};
+    int shape_wte[] = {config->vocab_size, config->n_embd};
     model->emb.wte = tensor_alloc(2, shape_wte);
     if (model->emb.wte == NULL) return -1;
     int shape_wpe[] = {config->n_positions, config->n_embd};
@@ -67,6 +67,43 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
     if (model->ln_f.w == NULL) return -1;
     model->ln_f.b = tensor_alloc(1, shape_ln_f_w);
     if (model->ln_f.b == NULL) return -1;
+
+    return 0;
+}
+
+int gpt2_load_weights(gpt2_t *model, FILE *file) {
+    // emb
+    if (tensor_load(model->emb.wte, file) != 0) return -1;
+    if (tensor_load(model->emb.wpe, file) != 0) return -1;
+
+    // layers
+    for (int i = 0; i < NUM_LAYERS; i++) {
+        block_t *block = &model->h[i];
+
+        // ln_1
+        if (tensor_load(block->ln_1.w, file) != 0) return -1;
+        if (tensor_load(block->ln_1.b, file) != 0) return -1;
+
+        // attn
+        if (tensor_load(block->attn.qkv_w, file) != 0) return -1;
+        if (tensor_load(block->attn.qkv_b, file) != 0) return -1;
+        if (tensor_load(block->attn.proj_w, file) != 0) return -1;
+        if (tensor_load(block->attn.proj_b, file) != 0) return -1;
+
+        // ln_2
+        if (tensor_load(block->ln_2.w, file) != 0) return -1;
+        if (tensor_load(block->ln_2.b, file) != 0) return -1;
+
+        // mlp
+        if (tensor_load(block->mlp.fc_w, file) != 0) return -1;
+        if (tensor_load(block->mlp.fc_b, file) != 0) return -1;
+        if (tensor_load(block->mlp.proj_w, file) != 0) return -1;
+        if (tensor_load(block->mlp.proj_b, file) != 0) return -1;
+    }
+
+    // final layer norm
+    if (tensor_load(model->ln_f.w, file) != 0) return -1;
+    if (tensor_load(model->ln_f.b, file) != 0) return -1;
 
     return 0;
 }

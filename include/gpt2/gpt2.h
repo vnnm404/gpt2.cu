@@ -69,7 +69,7 @@ typedef struct
 } gpt2_t;
 
 int gpt2_initialize(gpt2_t *model, const config_t *config);
-int gpt2_load_weights(gpt2_t *model, const char *filename);
+int gpt2_load_weights(gpt2_t *model, FILE *file);
 void gpt2_free(gpt2_t *model);
 
 #endif /* GPT2_GPT2_H */

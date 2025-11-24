@@ -5,6 +5,8 @@
 *.cubin
 *.fatbin
 
+.venv/
+
 .vscode/
 
 data/

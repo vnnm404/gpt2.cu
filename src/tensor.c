@@ -41,6 +41,15 @@ int tensor_size(const tensor_t *tensor) {
     return size;
 }
 
+int tensor_load(tensor_t *tensor, FILE *file) {
+    int size = tensor_size(tensor);
+    size_t read = fread(tensor->data, sizeof(float), size, file);
+    if (read != size) {
+        return -1; // error reading
+    }
+    return 0; // success
+}
+
 void tensor_free(tensor_t *tensor) {
     if (tensor->data) {
         free(tensor->data);
