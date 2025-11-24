@@ -1,6 +1,7 @@
 # Build GPT-2 library
 
 file(GLOB_RECURSE SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cu"
     "${CMAKE_CURRENT_SOURCE_DIR}/layers/*.cu"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/*.cu"

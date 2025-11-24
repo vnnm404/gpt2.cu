@@ -5,6 +5,8 @@
 *.cubin
 *.fatbin
 
+.vscode/
+
 data/
 models/
 build/

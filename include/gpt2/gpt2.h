@@ -3,81 +3,73 @@
 
 /* GPT-2 model structures and functions will be defined here */
 
+#include "tensor.h"
+
 #define NUM_PARAMETER_TENSORS 16
 #define NUM_ACTIVATION_TENSORS 23
 
+#define NUM_LAYERS 12
+#define NUM_HEADS 12
+#define EMBEDDING_SIZE 768
+#define CONTEXT_SIZE 1024
+#define VOCAB_SIZE 50257
+#define PADDED_VOCAB_SIZE 50304
+
 typedef struct
 {
-    int max_seq_len;       // max sequence length, e.g. 1024
     int vocab_size;        // vocab size, e.g. 50257
     int padded_vocab_size; // padded to e.g. %128==0, 50304
-    int num_layers;        // number of layers, e.g. 12
-    int num_heads;         // number of heads in attention, e.g. 12
-    int channels;          // number of channels, e.g. 768
-} GPT2Config;
+    int n_layer;           // number of layers, e.g. 12
+    int n_head;            // number of heads in attention, e.g. 12
+    int n_embd;            // number of channels, e.g. 768
+    int n_positions;       // max sequence length, e.g. 1024
+    int n_ctx;             // context size, e.g. 1024
+} config_t;
 
 typedef struct
 {
-    float *wte;      // (V, C)
-    float *wpe;      // (maxT, C)
-    float *ln1w;     // (L, C)
-    float *ln1b;     // (L, C)
-    float *qkvw;     // (L, 3*C, C)
-    float *qkvb;     // (L, 3*C)
-    float *attprojw; // (L, C, C)
-    float *attprojb; // (L, C)
-    float *ln2w;     // (L, C)
-    float *ln2b;     // (L, C)
-    float *fcw;      // (L, 4*C, C)
-    float *fcb;      // (L, 4*C)
-    float *fcprojw;  // (L, C, 4*C)
-    float *fcprojb;  // (L, C)
-    float *lnfw;     // (C)
-    float *lnfb;     // (C)
-} ParameterTensors;
+    tensor_t *wte; // (V, h)
+    tensor_t *wpe; // (maxT, h)
+} emb_t;
 
 typedef struct
 {
-    float *encoded;   // (B, T, C)
-    float *ln1;       // (L, B, T, C)
-    float *ln1_mean;  // (L, B, T)
-    float *ln1_rstd;  // (L, B, T)
-    float *qkv;       // (L, B, T, 3*C)
-    float *atty;      // (L, B, T, C)
-    float *preatt;    // (L, B, NH, T, T)
-    float *att;       // (L, B, NH, T, T)
-    float *attproj;   // (L, B, T, C)
-    float *residual2; // (L, B, T, C)
-    float *ln2;       // (L, B, T, C)
-    float *ln2_mean;  // (L, B, T)
-    float *ln2_rstd;  // (L, B, T)
-    float *fch;       // (L, B, T, 4*C)
-    float *fch_gelu;  // (L, B, T, 4*C)
-    float *fcproj;    // (L, B, T, C)
-    float *residual3; // (L, B, T, C)
-    float *lnf;       // (B, T, C)
-    float *lnf_mean;  // (B, T)
-    float *lnf_rstd;  // (B, T)
-    float *logits;    // (B, T, V)
-    float *probs;     // (B, T, V)
-    float *losses;    // (B, T)
-} ActivationTensors;
+    tensor_t *w; // (h)
+    tensor_t *b; // (h)
+} ln_t;
 
 typedef struct
 {
-    GPT2Config config;
+    tensor_t *qkv_w;  // (3*h, h)
+    tensor_t *qkv_b;  // (3*h)
+    tensor_t *proj_w; // (h, h)
+    tensor_t *proj_b; // (h)
+} attn_t;
 
-    // the weights (parameters) of the model, and their sizes
-    ParameterTensors params;
-    size_t param_sizes[NUM_PARAMETER_TENSORS];
-    float *params_memory;
-    size_t num_parameters;
+typedef struct
+{
+    tensor_t *fc_w;   // (4*h, h)
+    tensor_t *fc_b;   // (4*h)
+    tensor_t *proj_w; // (h, 4*h)
+    tensor_t *proj_b; // (h)
+} ffn_t;
 
-    // the activations of the model, and their sizes
-    ActivationTensors acts;
-    size_t act_sizes[NUM_ACTIVATION_TENSORS];
-    float *acts_memory;
-    size_t num_activations;
-} GPT2;
+typedef struct {
+    ln_t ln_1;
+    attn_t attn;
+    ln_t ln_2;
+    ffn_t mlp;
+} block_t;
+
+typedef struct
+{
+    emb_t emb;
+    block_t h[NUM_LAYERS];
+    ln_t ln_f;
+} gpt2_t;
+
+int gpt2_initialize(gpt2_t *model, const config_t *config);
+int gpt2_load_weights(gpt2_t *model, const char *filename);
+void gpt2_free(gpt2_t *model);
 
 #endif /* GPT2_GPT2_H */

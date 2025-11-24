@@ -7,10 +7,11 @@ SCRIPT_DIR=$(dirname "$(realpath "$0")")
 BASE_URL="https://huggingface.co/datasets/karpathy/llmc-starter-pack/resolve/main/"
 
 # Directory paths based on script location
-SAVE_DIR_PARENT="$SCRIPT_DIR/../models/"
+SAVE_DIR_PARENT="$SCRIPT_DIR/../models"
 SAVE_DIR_TINY="$SCRIPT_DIR/../data/tinyshakespeare"
 
 # Create the directories if they don't exist
+mkdir -p "$SAVE_DIR_PARENT"
 mkdir -p "$SAVE_DIR_TINY"
     
 # Files to download
