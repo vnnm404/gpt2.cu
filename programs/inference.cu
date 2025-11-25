@@ -30,6 +30,7 @@ typedef struct {
     tensor_t *buf1; // [batch_size, seq_len, n_embd * 4]
     tensor_t *buf2; // [batch_size, seq_len, n_embd * 4]
     tensor_t *res;  // [batch_size, seq_len, n_embd]
+    tensor_t *logits; // [batch_size, seq_len, vocab_size]
 
     tensor_t *preatt;  // [batch_size, n_head, seq_len, seq_len]
     tensor_t *att;  // [batch_size, n_head, seq_len, seq_len]
@@ -41,6 +42,7 @@ int prepare_input_tokens(int *input_tokens, int seq_len, int **d_input_tokens);
 void free_inference_buffers(inference_buffers_t *buffers);
 int setup_inference_buffers(inference_buffers_t *buffers);
 void forward(const int *d_input_tokens, int seq_len);
+int extract_greedy_token(int seq_len, tensor_t *logits);
 
 int main() {
     printf("GPT-2 inference\n");
@@ -69,8 +71,8 @@ int main() {
     printf("Model loaded successfully.\n");
 
     // sample tokens: "The capital of France is"
-    int input_tokens[] = {464, 3139, 286, 4881, 318};  
-    int seq_len = 5;
+    int input_tokens[] = {464, 3139, 286, 4881, 318, 262, 3139, 286};  
+    int seq_len = 8;
     
     int *d_input_tokens;
     if (prepare_input_tokens(input_tokens, seq_len, &d_input_tokens) != 0) {
@@ -97,15 +99,6 @@ int main() {
     forward(d_input_tokens, seq_len);
     cudaDeviceSynchronize();
 
-    // float *h_res_layer = (float *) malloc(sizeof(float) * seq_len * config.n_embd);
-    // cudaMemcpy(h_res_layer, buffers.res->data, sizeof(float) * seq_len * config.n_embd, cudaMemcpyDeviceToHost);
-    // printf("After layer %d, token features (second token):\n", config.n_layer - 1);
-    // for (int i = 0; i < config.n_embd; i++) {
-    //     printf("%f ", h_res_layer[config.n_embd + i]);
-    // }
-    // printf("\n");
-    // free(h_res_layer);
-
     // Stop timing and calculate elapsed time
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
@@ -115,6 +108,10 @@ int main() {
     
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
+
+    // Extract predicted token (greedy)
+    int predicted_token = extract_greedy_token(seq_len, buffers.logits);
+    printf("Predicted next token ID: %d\n", predicted_token);
 
     cudaFree(d_input_tokens);
     free_inference_buffers(&buffers);
@@ -174,6 +171,13 @@ int setup_inference_buffers(inference_buffers_t *buffers) {
         return -1;
     }
 
+    int logits_shape[] = {1, config.n_ctx, config.vocab_size};
+    buffers->logits = tensor_alloc(3, logits_shape);
+    if (buffers->logits == NULL) {
+        free_inference_buffers(buffers);
+        return -1;
+    }
+
     int preatt_shape[] = {1, config.n_head, config.n_ctx, config.n_ctx};
     buffers->preatt = tensor_alloc(4, preatt_shape);
     if (buffers->preatt == NULL) {
@@ -192,7 +196,7 @@ int setup_inference_buffers(inference_buffers_t *buffers) {
 }
 
 void forward(const int *d_input_tokens, int seq_len) {
-    embedding_forward<<<1, 256>>>(buffers.res->data, d_input_tokens, model.emb.wte->data, model.emb.wpe->data, seq_len, config.n_embd, config.n_positions);
+    embedding_forward<<<1, 256>>>(buffers.res->data, d_input_tokens, model.emb.wte->data, model.emb.wpe->data, seq_len, config.n_embd, config.vocab_size, config.n_positions);
 
     // layers
     for (int layer_idx = 0; layer_idx < config.n_layer; layer_idx++) {
@@ -220,4 +224,27 @@ void forward(const int *d_input_tokens, int seq_len) {
     }
 
     layernorm_forward<<<1, 256>>>(buffers.res->data, buffers.res->data, model.ln_f.w->data, model.ln_f.b->data, seq_len, config.n_embd);
+
+    mlp_forward<<<CEIL_DIV(1 * seq_len * config.vocab_size, 256), 256>>>(buffers.logits->data, buffers.res->data, model.emb.wte->data, NULL, 1, seq_len, config.n_embd, config.vocab_size);
+
+    // print first 4 
+}
+
+int extract_greedy_token(int seq_len, tensor_t *logits) {
+    // logits: [1, seq_len, vocab_size]
+
+    float *h_logits = (float *) malloc(sizeof(float) * config.vocab_size);
+    cudaMemcpy(h_logits, logits->data + (seq_len - 1) * logits->shape[2], sizeof(float) * config.vocab_size, cudaMemcpyDeviceToHost);
+
+    int max_token = 0;
+    float max_logit = h_logits[0];
+    for (int i = 1; i < config.vocab_size; i++) {
+        if (h_logits[i] > max_logit) {
+            max_logit = h_logits[i];
+            max_token = i;
+        }
+    }
+    free(h_logits);
+
+    return max_token;
 }

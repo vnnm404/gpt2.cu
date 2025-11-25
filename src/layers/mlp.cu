@@ -26,7 +26,7 @@ __global__ void mlp_forward(float *out, const float *input, const float *w, cons
         
         // Compute dot product: input[:] @ w[:, o]
         // weights are stored as [input_dim, output_dim], so column o is at w[i * output_dim + o]
-        float val = b[o];
+        float val = (b == NULL) ? 0.0f : b[o];
         for (int i = 0; i < input_dim; i++) {
             val += inp_bt[i] * w[i * output_dim + o];
         }

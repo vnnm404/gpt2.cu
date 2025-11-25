@@ -1,47 +1,47 @@
-# import torch
-# from transformers import GPT2Model, GPT2Tokenizer
+import torch
+from transformers import GPT2Model, GPT2Tokenizer
 
-# # Load GPT-2 small (without LM head)
-# model_name = "gpt2"
-# model = GPT2Model.from_pretrained(model_name)
-# model.eval()
+# Load GPT-2 small (without LM head)
+model_name = "gpt2"
+model = GPT2Model.from_pretrained(model_name)
+model.eval()
 
-# tokenizer = GPT2Tokenizer.from_pretrained(model_name)
-# tokenizer.pad_token = tokenizer.eos_token  # set pad token
+tokenizer = GPT2Tokenizer.from_pretrained(model_name)
+tokenizer.pad_token = tokenizer.eos_token  # set pad token
 
-# # Input prompt
-# input_text = "The capital of France is"
-# input_ids = tokenizer(input_text, return_tensors="pt")["input_ids"]
+# Input prompt
+input_text = "The capital of France is"
+input_ids = tokenizer(input_text, return_tensors="pt")["input_ids"]
 
-# # Number of tokens to generate
-# num_tokens_to_generate = 10
+# Number of tokens to generate
+num_tokens_to_generate = 10
 
-# # Prepare hidden input_ids for iterative generation
-# generated_ids = input_ids.clone()
+# Prepare hidden input_ids for iterative generation
+generated_ids = input_ids.clone()
 
-# for _ in range(num_tokens_to_generate):
-#     with torch.no_grad():
-#         # Get hidden states from GPT-2 transformer
-#         outputs = model(generated_ids)
-#         hidden_states = outputs.last_hidden_state  # [batch, seq_len, hidden_size]
+for _ in range(num_tokens_to_generate):
+    with torch.no_grad():
+        # Get hidden states from GPT-2 transformer
+        outputs = model(generated_ids)
+        hidden_states = outputs.last_hidden_state  # [batch, seq_len, hidden_size]
 
-#         # Get GPT-2 token embeddings
-#         embedding_weights = model.wte.weight  # [vocab_size, hidden_size]
+        # Get GPT-2 token embeddings
+        embedding_weights = model.wte.weight  # [vocab_size, hidden_size]
 
-#         # Compute logits for the last token only
-#         logits = torch.matmul(hidden_states[:, -1, :], embedding_weights.T)  # [batch, vocab_size]
+        # Compute logits for the last token only
+        logits = torch.matmul(hidden_states[:, -1, :], embedding_weights.T)  # [batch, vocab_size]
 
-#         # Pick the token with highest probability (greedy)
-#         next_token_id = torch.argmax(logits, dim=-1).unsqueeze(-1)  # shape [batch, 1]
+        # Pick the token with highest probability (greedy)
+        next_token_id = torch.argmax(logits, dim=-1).unsqueeze(-1)  # shape [batch, 1]
 
-#         # Append the predicted token to generated_ids
-#         generated_ids = torch.cat([generated_ids, next_token_id], dim=-1)
+        # Append the predicted token to generated_ids
+        generated_ids = torch.cat([generated_ids, next_token_id], dim=-1)
 
-# # Decode generated text
-# generated_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+# Decode generated text
+generated_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
 
-# print("Prompt: ", input_text)
-# print("Generated Text: ", generated_text)
+print("Prompt: ", input_text)
+print("Generated Text: ", generated_text)
 
 
 # import torch
@@ -254,24 +254,24 @@
 # print("Layer-0 block output shape:", block_output.shape)
 # print("\nSecond-token output (after full layer-0 block):\n", second_token_output)
 
-import torch
-from transformers import GPT2Model, GPT2Tokenizer
-import time
+# import torch
+# from transformers import GPT2Model, GPT2Tokenizer
+# import time
 
-# Load GPT-2 small (without LM head)
-model_name = "gpt2"
-model = GPT2Model.from_pretrained(model_name)
-model.eval()
+# # Load GPT-2 small (without LM head)
+# model_name = "gpt2"
+# model = GPT2Model.from_pretrained(model_name)
+# model.eval()
 
-tokenizer = GPT2Tokenizer.from_pretrained(model_name)
-tokenizer.pad_token = tokenizer.eos_token
+# tokenizer = GPT2Tokenizer.from_pretrained(model_name)
+# tokenizer.pad_token = tokenizer.eos_token
 
-# Input prompt
-input_text = "The capital of France is"
-inputs = tokenizer(input_text, return_tensors="pt")
-input_ids = inputs["input_ids"]
+# # Input prompt
+# input_text = "The capital of France is"
+# inputs = tokenizer(input_text, return_tensors="pt")
+# input_ids = inputs["input_ids"]
 
-# # -------- Run model and get final hidden states --------
+# # # -------- Run model and get final hidden states --------
 # with torch.no_grad():
 #     outputs = model(input_ids)
 #     final_hidden = outputs.last_hidden_state  # [1, seq_len, hidden_size]
@@ -283,68 +283,68 @@ input_ids = inputs["input_ids"]
 # print("\nFinal features for second token:\n", second_token_final)
 
 # ======== CPU vs GPU Benchmarking ========
-print("\n" + "="*60)
-print("Benchmarking CPU vs GPU forward pass")
-print("="*60)
+# print("\n" + "="*60)
+# print("Benchmarking CPU vs GPU forward pass")
+# print("="*60)
 
-# Number of warmup and benchmark runs
-num_warmup = 5
-num_runs = 20
+# # Number of warmup and benchmark runs
+# num_warmup = 5
+# num_runs = 20
 
-# -------- CPU Benchmark --------
-print("\n[CPU Benchmark]")
-model_cpu = GPT2Model.from_pretrained(model_name)
-model_cpu.eval()
-input_ids_cpu = input_ids.cpu()
+# # -------- CPU Benchmark --------
+# print("\n[CPU Benchmark]")
+# model_cpu = GPT2Model.from_pretrained(model_name)
+# model_cpu.eval()
+# input_ids_cpu = input_ids.cpu()
 
-# Warmup
-for _ in range(num_warmup):
-    with torch.no_grad():
-        _ = model_cpu(input_ids_cpu)
+# # Warmup
+# for _ in range(num_warmup):
+#     with torch.no_grad():
+#         _ = model_cpu(input_ids_cpu)
 
-# Benchmark
-cpu_times = []
-for _ in range(num_runs):
-    start_time = time.perf_counter()
-    with torch.no_grad():
-        _ = model_cpu(input_ids_cpu)
-    end_time = time.perf_counter()
-    cpu_times.append((end_time - start_time) * 1000)  # Convert to milliseconds
+# # Benchmark
+# cpu_times = []
+# for _ in range(num_runs):
+#     start_time = time.perf_counter()
+#     with torch.no_grad():
+#         _ = model_cpu(input_ids_cpu)
+#     end_time = time.perf_counter()
+#     cpu_times.append((end_time - start_time) * 1000)  # Convert to milliseconds
 
-cpu_mean = sum(cpu_times) / len(cpu_times)
-print(f"CPU average time: {cpu_mean:.3f} ms (over {num_runs} runs)")
+# cpu_mean = sum(cpu_times) / len(cpu_times)
+# print(f"CPU average time: {cpu_mean:.3f} ms (over {num_runs} runs)")
 
-# -------- GPU Benchmark --------
-if torch.cuda.is_available():
-    print("\n[GPU Benchmark]")
-    model_gpu = GPT2Model.from_pretrained(model_name)
-    model_gpu.eval()
-    model_gpu = model_gpu.cuda()
-    input_ids_gpu = input_ids.cuda()
+# # -------- GPU Benchmark --------
+# if torch.cuda.is_available():
+#     print("\n[GPU Benchmark]")
+#     model_gpu = GPT2Model.from_pretrained(model_name)
+#     model_gpu.eval()
+#     model_gpu = model_gpu.cuda()
+#     input_ids_gpu = input_ids.cuda()
     
-    # Warmup
-    for _ in range(num_warmup):
-        with torch.no_grad():
-            _ = model_gpu(input_ids_gpu)
-    torch.cuda.synchronize()
+#     # Warmup
+#     for _ in range(num_warmup):
+#         with torch.no_grad():
+#             _ = model_gpu(input_ids_gpu)
+#     torch.cuda.synchronize()
     
-    # Benchmark
-    gpu_times = []
-    for _ in range(num_runs):
-        torch.cuda.synchronize()
-        start_time = time.perf_counter()
-        with torch.no_grad():
-            _ = model_gpu(input_ids_gpu)
-        torch.cuda.synchronize()
-        end_time = time.perf_counter()
-        gpu_times.append((end_time - start_time) * 1000)  # Convert to milliseconds
+#     # Benchmark
+#     gpu_times = []
+#     for _ in range(num_runs):
+#         torch.cuda.synchronize()
+#         start_time = time.perf_counter()
+#         with torch.no_grad():
+#             _ = model_gpu(input_ids_gpu)
+#         torch.cuda.synchronize()
+#         end_time = time.perf_counter()
+#         gpu_times.append((end_time - start_time) * 1000)  # Convert to milliseconds
     
-    gpu_mean = sum(gpu_times) / len(gpu_times)
-    print(f"GPU average time: {gpu_mean:.3f} ms (over {num_runs} runs)")
+#     gpu_mean = sum(gpu_times) / len(gpu_times)
+#     print(f"GPU average time: {gpu_mean:.3f} ms (over {num_runs} runs)")
     
-    # Speedup
-    speedup = cpu_mean / gpu_mean
-    print(f"\n[Results]")
-    print(f"GPU is {speedup:.2f}x faster than CPU")
-else:
-    print("\nGPU not available for benchmarking")
+#     # Speedup
+#     speedup = cpu_mean / gpu_mean
+#     print(f"\n[Results]")
+#     print(f"GPU is {speedup:.2f}x faster than CPU")
+# else:
+#     print("\nGPU not available for benchmarking")

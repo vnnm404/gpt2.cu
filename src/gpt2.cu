@@ -8,7 +8,7 @@
 
 int gpt2_initialize(gpt2_t *model, const config_t *config) {
     // emb
-    int shape_wte[] = {config->vocab_size, config->n_embd};
+    int shape_wte[] = {config->n_embd, config->vocab_size};
     model->emb.wte = tensor_alloc(2, shape_wte);
     if (model->emb.wte == NULL) return -1;
     int shape_wpe[] = {config->n_positions, config->n_embd};

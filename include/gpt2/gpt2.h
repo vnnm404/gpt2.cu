@@ -28,7 +28,7 @@ typedef struct
 
 typedef struct
 {
-    tensor_t *wte; // (V, h)
+    tensor_t *wte; // (h, V)
     tensor_t *wpe; // (maxT, h)
 } emb_t;
 
