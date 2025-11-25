@@ -165,8 +165,98 @@
 # print("\nK vector:\n", K)
 # print("\nV vector:\n", V)
 
+# import torch
+# from transformers import GPT2Model, GPT2Tokenizer
+
+# # Load GPT-2 small (without LM head)
+# model_name = "gpt2"
+# model = GPT2Model.from_pretrained(model_name)
+# model.eval()
+
+# tokenizer = GPT2Tokenizer.from_pretrained(model_name)
+# tokenizer.pad_token = tokenizer.eos_token
+
+# # Input prompt
+# input_text = "The capital of France is"
+# inputs = tokenizer(input_text, return_tensors="pt")
+# input_ids = inputs["input_ids"]
+
+# # -------- Hook to capture attn_output (after attention, before c_proj) --------
+# attn_output_capture = {}
+
+# def attn_hook(module, input, output):
+#     """
+#     module: GPT2Attention
+#     output: attn_output already combined across heads, shape [batch, seq, hidden]
+#     """
+#     attn_output = output[0]
+#     attn_output_capture["value"] = attn_output.detach()
+
+# # Register hook on first transformer block's attention module
+# hook = model.h[0].attn.register_forward_hook(attn_hook)
+
+# # -------- Run model --------
+# with torch.no_grad():
+#     _ = model(input_ids)
+
+# hook.remove()
+
+# # Extract attention output BEFORE c_proj
+# attn_output = attn_output_capture["value"]    # [1, seq_len, hidden_size]
+
+# # Select second token (index = 1)
+# second_token_attn = attn_output[0, 1]         # [hidden_size]
+
+# print("Attention output shape:", attn_output.shape)
+# print("\nSecond-token attention output (before c_proj):\n", second_token_attn)
+
+# import torch
+# from transformers import GPT2Model, GPT2Tokenizer
+
+# # Load GPT-2 small (without LM head)
+# model_name = "gpt2"
+# model = GPT2Model.from_pretrained(model_name)
+# model.eval()
+
+# tokenizer = GPT2Tokenizer.from_pretrained(model_name)
+# tokenizer.pad_token = tokenizer.eos_token
+
+# # Input prompt
+# input_text = "The capital of France is"
+# inputs = tokenizer(input_text, return_tensors="pt")
+# input_ids = inputs["input_ids"]
+
+# # -------- Hook to capture output AFTER the full transformer block (layer 0) --------
+# block_output_capture = {}
+
+# def block_hook(module, input, output):
+#     """
+#     module: GPT2Block
+#     output: hidden states after full block (attn + MLP + residuals)
+#     """
+#     block_output_capture["value"] = output[0].detach()
+
+# # Register hook on whole transformer block 11
+# hook = model.h[11].register_forward_hook(block_hook)
+
+# # -------- Run model --------
+# with torch.no_grad():
+#     _ = model(input_ids)
+
+# hook.remove()
+
+# # Extract block output [1, seq_len, hidden_size]
+# block_output = block_output_capture["value"]
+
+# # Select second token (index = 1)
+# second_token_output = block_output[0, 1]
+
+# print("Layer-0 block output shape:", block_output.shape)
+# print("\nSecond-token output (after full layer-0 block):\n", second_token_output)
+
 import torch
 from transformers import GPT2Model, GPT2Tokenizer
+import time
 
 # Load GPT-2 small (without LM head)
 model_name = "gpt2"
@@ -181,31 +271,80 @@ input_text = "The capital of France is"
 inputs = tokenizer(input_text, return_tensors="pt")
 input_ids = inputs["input_ids"]
 
-# -------- Hook to capture attn_output (after attention, before c_proj) --------
-attn_output_capture = {}
+# # -------- Run model and get final hidden states --------
+# with torch.no_grad():
+#     outputs = model(input_ids)
+#     final_hidden = outputs.last_hidden_state  # [1, seq_len, hidden_size]
 
-def attn_hook(module, input, output):
-    """
-    module: GPT2Attention
-    output: attn_output already combined across heads, shape [batch, seq, hidden]
-    """
-    attn_output = output[0]
-    attn_output_capture["value"] = attn_output.detach()
+# # Select second token (index = 1)
+# second_token_final = final_hidden[0, 1]
 
-# Register hook on first transformer block's attention module
-hook = model.h[0].attn.register_forward_hook(attn_hook)
+# print("Final output hidden state shape:", final_hidden.shape)
+# print("\nFinal features for second token:\n", second_token_final)
 
-# -------- Run model --------
-with torch.no_grad():
-    _ = model(input_ids)
+# ======== CPU vs GPU Benchmarking ========
+print("\n" + "="*60)
+print("Benchmarking CPU vs GPU forward pass")
+print("="*60)
 
-hook.remove()
+# Number of warmup and benchmark runs
+num_warmup = 5
+num_runs = 20
 
-# Extract attention output BEFORE c_proj
-attn_output = attn_output_capture["value"]    # [1, seq_len, hidden_size]
+# -------- CPU Benchmark --------
+print("\n[CPU Benchmark]")
+model_cpu = GPT2Model.from_pretrained(model_name)
+model_cpu.eval()
+input_ids_cpu = input_ids.cpu()
 
-# Select second token (index = 1)
-second_token_attn = attn_output[0, 1]         # [hidden_size]
+# Warmup
+for _ in range(num_warmup):
+    with torch.no_grad():
+        _ = model_cpu(input_ids_cpu)
 
-print("Attention output shape:", attn_output.shape)
-print("\nSecond-token attention output (before c_proj):\n", second_token_attn)
+# Benchmark
+cpu_times = []
+for _ in range(num_runs):
+    start_time = time.perf_counter()
+    with torch.no_grad():
+        _ = model_cpu(input_ids_cpu)
+    end_time = time.perf_counter()
+    cpu_times.append((end_time - start_time) * 1000)  # Convert to milliseconds
+
+cpu_mean = sum(cpu_times) / len(cpu_times)
+print(f"CPU average time: {cpu_mean:.3f} ms (over {num_runs} runs)")
+
+# -------- GPU Benchmark --------
+if torch.cuda.is_available():
+    print("\n[GPU Benchmark]")
+    model_gpu = GPT2Model.from_pretrained(model_name)
+    model_gpu.eval()
+    model_gpu = model_gpu.cuda()
+    input_ids_gpu = input_ids.cuda()
+    
+    # Warmup
+    for _ in range(num_warmup):
+        with torch.no_grad():
+            _ = model_gpu(input_ids_gpu)
+    torch.cuda.synchronize()
+    
+    # Benchmark
+    gpu_times = []
+    for _ in range(num_runs):
+        torch.cuda.synchronize()
+        start_time = time.perf_counter()
+        with torch.no_grad():
+            _ = model_gpu(input_ids_gpu)
+        torch.cuda.synchronize()
+        end_time = time.perf_counter()
+        gpu_times.append((end_time - start_time) * 1000)  # Convert to milliseconds
+    
+    gpu_mean = sum(gpu_times) / len(gpu_times)
+    print(f"GPU average time: {gpu_mean:.3f} ms (over {num_runs} runs)")
+    
+    # Speedup
+    speedup = cpu_mean / gpu_mean
+    print(f"\n[Results]")
+    print(f"GPU is {speedup:.2f}x faster than CPU")
+else:
+    print("\nGPU not available for benchmarking")

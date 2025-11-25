@@ -9,6 +9,8 @@
 #include "gpt2/layers/layernorm.h"
 #include "gpt2/layers/mlp.h"
 #include "gpt2/layers/attention.h"
+#include "gpt2/layers/residual.h"
+#include "gpt2/layers/gelu.h"
 
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
 
@@ -21,15 +23,104 @@ config_t config = {
     .n_positions = 1024,
     .n_ctx = 1024
 };
+
 gpt2_t model;
 
 typedef struct {
-    tensor_t *res;
-    tensor_t *out;
+    tensor_t *buf1; // [batch_size, seq_len, n_embd * 4]
+    tensor_t *buf2; // [batch_size, seq_len, n_embd * 4]
+    tensor_t *res;  // [batch_size, seq_len, n_embd]
 
     tensor_t *preatt;  // [batch_size, n_head, seq_len, seq_len]
     tensor_t *att;  // [batch_size, n_head, seq_len, seq_len]
 } inference_buffers_t;
+
+inference_buffers_t buffers;
+
+int prepare_input_tokens(int *input_tokens, int seq_len, int **d_input_tokens);
+void free_inference_buffers(inference_buffers_t *buffers);
+int setup_inference_buffers(inference_buffers_t *buffers);
+void forward(const int *d_input_tokens, int seq_len);
+
+int main() {
+    printf("GPT-2 inference\n");
+
+    if (gpt2_initialize(&model, &config) != 0) {
+        fprintf(stderr, "Failed to initialize GPT-2 model\n");
+        return -1;
+    }
+
+    FILE *file = fopen("../models/gpt2-124M-weights.bin", "rb");
+    if (file == NULL) {
+        fprintf(stderr, "Failed to open weights file: %s\n", "../models/gpt2-124M-weights.bin");
+        return -1;
+    }
+
+    // Load weights
+    if (gpt2_load_weights(&model, file) != 0) {
+        fprintf(stderr, "Failed to load GPT-2 weights\n");
+
+        gpt2_free(&model);
+        fclose(file);
+        return -1;
+    }
+    fclose(file);
+
+    printf("Model loaded successfully.\n");
+
+    // sample tokens: "The capital of France is"
+    int input_tokens[] = {464, 3139, 286, 4881, 318};  
+    int seq_len = 5;
+    
+    int *d_input_tokens;
+    if (prepare_input_tokens(input_tokens, seq_len, &d_input_tokens) != 0) {
+        gpt2_free(&model);
+        fclose(file);
+        return -1;
+    }
+
+    // setup inference buffers on GPU
+    if (setup_inference_buffers(&buffers) != 0) {
+        fprintf(stderr, "Failed to setup inference buffers\n");
+        gpt2_free(&model);
+        fclose(file);
+        return -1;
+    }
+
+    // Start timing for forward pass
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
+
+    // Forward pass
+    forward(d_input_tokens, seq_len);
+    cudaDeviceSynchronize();
+
+    // float *h_res_layer = (float *) malloc(sizeof(float) * seq_len * config.n_embd);
+    // cudaMemcpy(h_res_layer, buffers.res->data, sizeof(float) * seq_len * config.n_embd, cudaMemcpyDeviceToHost);
+    // printf("After layer %d, token features (second token):\n", config.n_layer - 1);
+    // for (int i = 0; i < config.n_embd; i++) {
+    //     printf("%f ", h_res_layer[config.n_embd + i]);
+    // }
+    // printf("\n");
+    // free(h_res_layer);
+
+    // Stop timing and calculate elapsed time
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("fwd pass time: %.3f ms\n", milliseconds);
+    
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+    cudaFree(d_input_tokens);
+    free_inference_buffers(&buffers);
+    gpt2_free(&model);
+    return 0;
+}
 
 int prepare_input_tokens(int *input_tokens, int seq_len, int **d_input_tokens) {
     int *input_tokens_host = (int *) malloc(sizeof(int) * seq_len);
@@ -54,168 +145,79 @@ int prepare_input_tokens(int *input_tokens, int seq_len, int **d_input_tokens) {
     return 0;
 }
 
+void free_inference_buffers(inference_buffers_t *buffers) {
+    tensor_free(buffers->buf1);
+    tensor_free(buffers->buf2);
+    tensor_free(buffers->res);
+    tensor_free(buffers->preatt);
+    tensor_free(buffers->att);
+}
+
 int setup_inference_buffers(inference_buffers_t *buffers) {
+    int buf1_shape[] = {1, config.n_ctx, config.n_embd * 4};
+    buffers->buf1 = tensor_alloc(3, buf1_shape);
+    if (buffers->buf1 == NULL) {
+        return -1;
+    }
+
+    int buf2_shape[] = {1, config.n_ctx, config.n_embd * 4};
+    buffers->buf2 = tensor_alloc(3, buf2_shape);
+    if (buffers->buf2 == NULL) {
+        free_inference_buffers(buffers);
+        return -1;
+    }
+
     int res_shape[] = {1, config.n_ctx, config.n_embd};
     buffers->res = tensor_alloc(3, res_shape);
-
-    int out_shape[] = {1, config.n_ctx, config.n_embd * 4};  // saving space for ffn
-    buffers->out = tensor_alloc(3, out_shape);
+    if (buffers->res == NULL) {
+        free_inference_buffers(buffers);
+        return -1;
+    }
 
     int preatt_shape[] = {1, config.n_head, config.n_ctx, config.n_ctx};
     buffers->preatt = tensor_alloc(4, preatt_shape);
+    if (buffers->preatt == NULL) {
+        free_inference_buffers(buffers);
+        return -1;
+    }
 
     int att_shape[] = {1, config.n_head, config.n_ctx, config.n_ctx};
     buffers->att = tensor_alloc(4, att_shape);
+    if (buffers->att == NULL) {
+        free_inference_buffers(buffers);
+        return -1;
+    }
 
-    return buffers->res != NULL && buffers->out != NULL && buffers->preatt != NULL && buffers->att != NULL ? 0 : -1;
+    return 0;
 }
 
-void reset_inference_attn_buffers(inference_buffers_t *buffers) {
-    // initialize preatt and att to zero
-    cudaMemset(buffers->preatt->data, 0, sizeof(float) * tensor_size(buffers->preatt));
-    cudaMemset(buffers->att->data, 0, sizeof(float) * tensor_size(buffers->att));
-}
-
-int main() {
-    printf("GPT-2 inference\n");
-
-    if (gpt2_initialize(&model, &config) != 0) {
-        fprintf(stderr, "Failed to initialize GPT-2 model\n");
-        return -1;
-    }
-
-    FILE *file = fopen("../models/gpt2-124M-weights.bin", "rb");
-    if (file == NULL) {
-        fprintf(stderr, "Failed to open weights file: %s\n", "../models/gpt2-124M-weights.bin");
-        return -1;
-    }
-
-    // Load weights
-    if (gpt2_load_weights(&model, file) != 0) {
-        fprintf(stderr, "Failed to load GPT-2 weights\n");
-
-        gpt2_free(&model);
-        fclose(file);
-        return -1;
-    }
-
-    printf("Model loaded successfully.\n");
-
-    // sample tokens: "The capital of France is"
-    int input_tokens[] = {464, 3139, 286, 4881, 318};  
-    int seq_len = 5;
-    
-    int *d_input_tokens;
-    if (prepare_input_tokens(input_tokens, seq_len, &d_input_tokens) != 0) {
-        gpt2_free(&model);
-        fclose(file);
-        return -1;
-    }
-
-    // setup inference buffers on GPU
-    inference_buffers_t buffers;
-    if (setup_inference_buffers(&buffers) != 0) {
-        fprintf(stderr, "Failed to setup inference buffers\n");
-        gpt2_free(&model);
-        fclose(file);
-        return -1;
-    }
-
-    // embedding layer
+void forward(const int *d_input_tokens, int seq_len) {
     embedding_forward<<<1, 256>>>(buffers.res->data, d_input_tokens, model.emb.wte->data, model.emb.wpe->data, seq_len, config.n_embd, config.n_positions);
-    cudaDeviceSynchronize();
-
-    // print res tensor first row for verification
-    // float *h_res = (float *) malloc(sizeof(float) * seq_len * config.n_embd);
-    // cudaMemcpy(h_res, buffers.res->data, sizeof(float) * seq_len * config.n_embd, cudaMemcpyDeviceToHost);
-    // printf("Embedding output (second token):\n");
-    // for (int i = 0; i < config.n_embd; i++) {
-    //     printf("%f ", h_res[config.n_embd + i]);
-    // }
-    // printf("\n");
-    // free(h_res);
 
     // layers
     for (int layer_idx = 0; layer_idx < config.n_layer; layer_idx++) {
         block_t *block = &model.h[layer_idx];
 
-        layernorm_forward<<<1, 256>>>(buffers.out->data, buffers.res->data, block->ln_1.w->data, block->ln_1.b->data, seq_len, config.n_embd);
-        cudaDeviceSynchronize();
+        layernorm_forward<<<1, 256>>>(buffers.buf1->data, buffers.res->data, block->ln_1.w->data, block->ln_1.b->data, seq_len, config.n_embd);
 
-        // print embedding of second token after layernorm for verification
-        // float *h_out = (float *) malloc(sizeof(float) * seq_len * config.n_embd);
-        // cudaMemcpy(h_out, buffers.out->data, sizeof(float) * seq_len * config.n_embd, cudaMemcpyDeviceToHost);
-        // printf("After Layer %d LayerNorm (second token):\n", layer_idx + 1);
-        // for (int i = 0; i < config.n_embd; i++) {
-        //     printf("%f ", h_out[config.n_embd + i]);
-        // }
-        // printf("\n");
-        // free(h_out);
+        mlp_forward<<<CEIL_DIV(seq_len * 3 * config.n_embd, 256), 256>>>(buffers.buf2->data, buffers.buf1->data, block->attn.qkv_w->data, block->attn.qkv_b->data, 1, seq_len, config.n_embd, config.n_embd * 3);
 
-        mlp_forward<<<CEIL_DIV(seq_len * 3 * config.n_embd, 256), 256>>>(buffers.res->data, buffers.out->data, block->attn.qkv_w->data, block->attn.qkv_b->data, 1, seq_len, config.n_embd, config.n_embd * 3);
-        cudaDeviceSynchronize();
+        attention_forward<<<CEIL_DIV(1 * seq_len * config.n_head, 256), 256>>>(buffers.buf1->data, buffers.preatt->data, buffers.att->data, buffers.buf2->data, 1, seq_len, config.n_head, config.n_embd);
 
-        // print q, k, v of second token for verification
-        // float *h_qkv = (float *) malloc(sizeof(float) * seq_len * 3 * config.n_embd);
-        // cudaMemcpy(h_qkv, buffers.res->data, sizeof(float) * seq_len * 3 * config.n_embd, cudaMemcpyDeviceToHost);
-        // printf("After Layer %d QKV Projection (second token):\n", layer_idx + 1);
-        
-        // // Token 1 (second token) starts at offset: 1 * 3 * n_embd
-        // int token_idx = 1;
-        // int token_offset = token_idx * 3 * config.n_embd;
-        
-        // printf("Q=\n");
-        // for (int i = 0; i < config.n_embd; i++) {
-        //     printf("%f ", h_qkv[token_offset + i]);
-        // }
-        // printf("\nK=\n");
-        // for (int i = 0; i < config.n_embd; i++) {
-        //     printf("%f ", h_qkv[token_offset + config.n_embd + i]);
-        // }
-        // printf("\nV=\n");
-        // for (int i = 0; i < config.n_embd; i++) {
-        //     printf("%f ", h_qkv[token_offset + 2 * config.n_embd + i]);
-        // }
-        // printf("\n");
-        // free(h_qkv);
+        mlp_forward<<<CEIL_DIV(1 * seq_len * config.n_embd, 256), 256>>>(buffers.buf2->data, buffers.buf1->data, block->attn.proj_w->data, block->attn.proj_b->data, 1, seq_len, config.n_embd, config.n_embd);
 
-        reset_inference_attn_buffers(&buffers);
+        residual_forward<<<CEIL_DIV(1 * seq_len * config.n_embd, 256), 256>>>(buffers.res->data, buffers.buf2->data, buffers.res->data, 1, seq_len, config.n_embd);
 
-        attention_forward<<<CEIL_DIV(1 * seq_len * config.n_head, 256), 256>>>(buffers.out->data, buffers.preatt->data, buffers.att->data, buffers.res->data, 1, seq_len, config.n_head, config.n_embd);
-        cudaDeviceSynchronize();
+        layernorm_forward<<<1, 256>>>(buffers.buf1->data, buffers.res->data, block->ln_2.w->data, block->ln_2.b->data, seq_len, config.n_embd);
 
-        // print attention output of second token for verification
-        // float *h_attn = (float *) malloc(sizeof(float) * seq_len * config.n_embd);
-        // cudaMemcpy(h_attn, buffers.out->data, sizeof(float) * seq_len * config.n_embd, cudaMemcpyDeviceToHost);
-        // printf("After Layer %d Attention (second token):\n", layer_idx + 1);
-        // for (int i = 0; i < config.n_embd; i++) {
-        //     printf("%f ", h_attn[config.n_embd + i]);
-        // }
-        // printf("\n");
-        // free(h_attn);
+        mlp_forward<<<CEIL_DIV(seq_len * 4 * config.n_embd, 256), 256>>>(buffers.buf2->data, buffers.buf1->data, block->mlp.fc_w->data, block->mlp.fc_b->data, 1, seq_len, config.n_embd, config.n_embd * 4);
 
-        mlp_forward<<<CEIL_DIV(1 * seq_len * config.n_embd, 256), 256>>>(buffers.res->data, buffers.out->data, block->attn.proj_w->data, block->attn.proj_b->data, 1, seq_len, config.n_embd, config.n_embd);
-        cudaDeviceSynchronize();
+        gelu_forward<<<CEIL_DIV(1 * seq_len * config.n_embd * 4, 256), 256>>>(buffers.buf1->data, buffers.buf2->data, 1, seq_len, config.n_embd * 4);
 
-        // print final output of second token for verification
-        // float *h_final = (float *) malloc(sizeof(float) * seq_len * config.n_embd);
-        // cudaMemcpy(h_final, buffers.res->data, sizeof(float) * seq_len * config.n_embd, cudaMemcpyDeviceToHost);
-        // printf("After Layer %d Output (second token):\n", layer_idx + 1);
-        // for (int i = 0; i < config.n_embd; i++) {
-        //     printf("%f ", h_final[config.n_embd + i]);
-        // }
-        // printf("\n");
-        // free(h_final);
+        mlp_forward<<<CEIL_DIV(1 * seq_len * config.n_embd, 256), 256>>>(buffers.buf2->data, buffers.buf1->data, block->mlp.proj_w->data, block->mlp.proj_b->data, 1, seq_len, config.n_embd * 4, config.n_embd);
 
-        break;
+        residual_forward<<<CEIL_DIV(1 * seq_len * config.n_embd, 256), 256>>>(buffers.res->data, buffers.buf2->data, buffers.res->data, 1, seq_len, config.n_embd);
     }
 
-    cudaFree(d_input_tokens);
-
-    tensor_free(buffers.res);
-    tensor_free(buffers.out);
-
-    gpt2_free(&model);
-    fclose(file);
-    return 0;
+    layernorm_forward<<<1, 256>>>(buffers.res->data, buffers.res->data, model.ln_f.w->data, model.ln_f.b->data, seq_len, config.n_embd);
 }

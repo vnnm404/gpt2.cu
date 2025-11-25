@@ -4,8 +4,8 @@
 add_library(unity STATIC ${CMAKE_SOURCE_DIR}/third_party/unity.c)
 target_include_directories(unity PUBLIC ${CMAKE_SOURCE_DIR}/third_party)
 
-# Automatically find all test_*.c files
-file(GLOB TEST_SOURCES "test_*.c")
+# Automatically find all test_*.cu files
+file(GLOB TEST_SOURCES "test_*.cu")
 
 # Create an executable for each test file
 foreach(TEST_SOURCE ${TEST_SOURCES})
