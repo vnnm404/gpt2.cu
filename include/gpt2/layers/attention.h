@@ -5,6 +5,6 @@
 
 /* Attention layer structures and functions will be defined here */
 
-__global__ void qkv_projection(float *out, const float *input, const float *weights, const float *bias, int batch_size, int seq_len, int n_embd);
+__global__ void attention_forward(float *out, float *preatt, float *att, const float *input, int batch_size, int seq_len, int n_head, int n_embd);
 
 #endif /* GPT2_LAYERS_ATTENTION_H */

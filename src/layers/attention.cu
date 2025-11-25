@@ -1,40 +1,88 @@
-/* Attention layer implementation - C implementation */
+/* Attention layer implementation - CUDA implementation */
 
 #include "gpt2/layers/attention.h"
+#include <cuda_runtime.h>
+#include <math.h>
 #include <stdio.h>
 
-// out: [batch_size, seq_len, 3 * n_embd]
-// input: [batch_size, seq_len, n_embd]
-// weights: [n_embd, 3 * n_embd]
-// bias: [3 * n_embd]
-// Launch with: qkv_projection<<<num_blocks, threads_per_block>>>(...)
-// where num_blocks = (batch_size * seq_len * 3 * n_embd + threads_per_block - 1) / threads_per_block
-// and threads_per_block = 256 (or similar)
-__global__ void qkv_projection(float *out, const float *input, const float *weights, const float *bias, int batch_size, int seq_len, int n_embd) {
-    // Global thread index across all blocks
+// CUDA kernel for attention forward pass
+// Each thread computes attention for one (batch, time, head) position
+// out: [B, T, C]
+// preatt: [B, NH, T, T]
+// att: [B, NH, T, T]
+// inp: [B, T, 3*C] where Q,K,V are concatenated
+__global__ void attention_forward(float* out, float* preatt, float* att,
+                                         const float* inp,
+                                         int B, int T, int NH, int C) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total_threads = B * T * NH;
     
-    int OC = 3 * n_embd;
-    int total_elements = batch_size * seq_len * OC;
+    if (idx >= total_threads) return;
     
-    if (idx < total_elements) {
-        // Decompose linear index into (batch, time, output_channel)
-        int o = idx % OC;
-        int t = (idx / OC) % seq_len;
-        int b = idx / (seq_len * OC);
+    // Decode indices: idx = b * T * NH + t * NH + h
+    int h = idx % NH;
+    int t = (idx / NH) % T;
+    int b = idx / (NH * T);
+    
+    int C3 = C * 3;
+    int hs = C / NH; // head size
+    float scale = 1.0f / sqrtf((float)hs);
+    
+    // Pointers to query for this head
+    const float* query_t = inp + b * T * C3 + t * C3 + h * hs;
+    float* preatt_bth = preatt + b * NH * T * T + h * T * T + t * T;
+    float* att_bth = att + b * NH * T * T + h * T * T + t * T;
+    
+    // Pass 1: Calculate query dot key and find maxval
+    float maxval = -10000.0f;
+    for (int t2 = 0; t2 <= t; t2++) {
+        const float* key_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C; // +C for key offset
         
-        // Pointer to input vector for this (batch, time) position
-        const float *inp_bt = input + b * seq_len * n_embd + t * n_embd;
-        
-        // Compute dot product: input[:] @ weights[:, o]
-        // weights are stored as [n_embd, 3*n_embd], so column o is at weights[i * OC + o]
-        float val = bias[o];
-        for (int i = 0; i < n_embd; i++) {
-            val += inp_bt[i] * weights[i * OC + o];
+        // Compute dot product: query_t · key_t2
+        float val = 0.0f;
+        for (int i = 0; i < hs; i++) {
+            val += query_t[i] * key_t2[i];
         }
+        val *= scale;
         
-        // Write output
-        // printf("out[%d, %d, %d] = %f\n", b, t, o, val);
-        out[idx] = val;
+        if (val > maxval) {
+            maxval = val;
+        }
+        preatt_bth[t2] = val;
+    }
+    
+    // Pass 2: Calculate exp and sum for softmax
+    float expsum = 0.0f;
+    for (int t2 = 0; t2 <= t; t2++) {
+        float expv = expf(preatt_bth[t2] - maxval);
+        expsum += expv;
+        att_bth[t2] = expv;
+    }
+    float expsum_inv = (expsum == 0.0f) ? 0.0f : 1.0f / expsum;
+    
+    // Pass 3: Normalize to get softmax (with causal mask)
+    for (int t2 = 0; t2 < T; t2++) {
+        if (t2 <= t) {
+            att_bth[t2] *= expsum_inv;
+        } else {
+            att_bth[t2] = 0.0f; // Causal mask
+        }
+    }
+    
+    // Pass 4: Accumulate weighted values into output
+    float* out_bth = out + b * T * C + t * C + h * hs;
+    
+    // Initialize output to zero
+    for (int i = 0; i < hs; i++) {
+        out_bth[i] = 0.0f;
+    }
+    
+    // Accumulate weighted values
+    for (int t2 = 0; t2 <= t; t2++) {
+        const float* value_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C * 2; // +C*2 for value offset
+        float att_btht2 = att_bth[t2];
+        for (int i = 0; i < hs; i++) {
+            out_bth[i] += att_btht2 * value_t2[i];
+        }
     }
 }

@@ -7,6 +7,7 @@
 #include "gpt2/gpt2.h"
 #include "gpt2/layers/embedding.h"
 #include "gpt2/layers/layernorm.h"
+#include "gpt2/layers/mlp.h"
 #include "gpt2/layers/attention.h"
 
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
@@ -25,6 +26,9 @@ gpt2_t model;
 typedef struct {
     tensor_t *res;
     tensor_t *out;
+
+    tensor_t *preatt;  // [batch_size, n_head, seq_len, seq_len]
+    tensor_t *att;  // [batch_size, n_head, seq_len, seq_len]
 } inference_buffers_t;
 
 int prepare_input_tokens(int *input_tokens, int seq_len, int **d_input_tokens) {
@@ -57,7 +61,19 @@ int setup_inference_buffers(inference_buffers_t *buffers) {
     int out_shape[] = {1, config.n_ctx, config.n_embd * 4};  // saving space for ffn
     buffers->out = tensor_alloc(3, out_shape);
 
-    return buffers->res != NULL && buffers->out != NULL ? 0 : -1;
+    int preatt_shape[] = {1, config.n_head, config.n_ctx, config.n_ctx};
+    buffers->preatt = tensor_alloc(4, preatt_shape);
+
+    int att_shape[] = {1, config.n_head, config.n_ctx, config.n_ctx};
+    buffers->att = tensor_alloc(4, att_shape);
+
+    return buffers->res != NULL && buffers->out != NULL && buffers->preatt != NULL && buffers->att != NULL ? 0 : -1;
+}
+
+void reset_inference_attn_buffers(inference_buffers_t *buffers) {
+    // initialize preatt and att to zero
+    cudaMemset(buffers->preatt->data, 0, sizeof(float) * tensor_size(buffers->preatt));
+    cudaMemset(buffers->att->data, 0, sizeof(float) * tensor_size(buffers->att));
 }
 
 int main() {
@@ -122,10 +138,6 @@ int main() {
     // layers
     for (int layer_idx = 0; layer_idx < config.n_layer; layer_idx++) {
         block_t *block = &model.h[layer_idx];
-        // self-attention
-        // (to be implemented)
-        // feed-forward
-        // (to be implemented)
 
         layernorm_forward<<<1, 256>>>(buffers.out->data, buffers.res->data, block->ln_1.w->data, block->ln_1.b->data, seq_len, config.n_embd);
         cudaDeviceSynchronize();
@@ -140,7 +152,7 @@ int main() {
         // printf("\n");
         // free(h_out);
 
-        qkv_projection<<<CEIL_DIV(seq_len * 3 * config.n_embd, 256), 256>>>(buffers.res->data, buffers.out->data, block->attn.qkv_w->data, block->attn.qkv_b->data, 1, seq_len, config.n_embd);
+        mlp_forward<<<CEIL_DIV(seq_len * 3 * config.n_embd, 256), 256>>>(buffers.res->data, buffers.out->data, block->attn.qkv_w->data, block->attn.qkv_b->data, 1, seq_len, config.n_embd, config.n_embd * 3);
         cudaDeviceSynchronize();
 
         // print q, k, v of second token for verification
@@ -166,6 +178,34 @@ int main() {
         // }
         // printf("\n");
         // free(h_qkv);
+
+        reset_inference_attn_buffers(&buffers);
+
+        attention_forward<<<CEIL_DIV(1 * seq_len * config.n_head, 256), 256>>>(buffers.out->data, buffers.preatt->data, buffers.att->data, buffers.res->data, 1, seq_len, config.n_head, config.n_embd);
+        cudaDeviceSynchronize();
+
+        // print attention output of second token for verification
+        // float *h_attn = (float *) malloc(sizeof(float) * seq_len * config.n_embd);
+        // cudaMemcpy(h_attn, buffers.out->data, sizeof(float) * seq_len * config.n_embd, cudaMemcpyDeviceToHost);
+        // printf("After Layer %d Attention (second token):\n", layer_idx + 1);
+        // for (int i = 0; i < config.n_embd; i++) {
+        //     printf("%f ", h_attn[config.n_embd + i]);
+        // }
+        // printf("\n");
+        // free(h_attn);
+
+        mlp_forward<<<CEIL_DIV(1 * seq_len * config.n_embd, 256), 256>>>(buffers.res->data, buffers.out->data, block->attn.proj_w->data, block->attn.proj_b->data, 1, seq_len, config.n_embd, config.n_embd);
+        cudaDeviceSynchronize();
+
+        // print final output of second token for verification
+        // float *h_final = (float *) malloc(sizeof(float) * seq_len * config.n_embd);
+        // cudaMemcpy(h_final, buffers.res->data, sizeof(float) * seq_len * config.n_embd, cudaMemcpyDeviceToHost);
+        // printf("After Layer %d Output (second token):\n", layer_idx + 1);
+        // for (int i = 0; i < config.n_embd; i++) {
+        //     printf("%f ", h_final[config.n_embd + i]);
+        // }
+        // printf("\n");
+        // free(h_final);
 
         break;
     }

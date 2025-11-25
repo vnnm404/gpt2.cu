@@ -112,6 +112,59 @@
 # print("First token (after ln_1) vector shape:", first_token_after_ln1.shape)
 # print(first_token_after_ln1)
 
+# import torch
+# from transformers import GPT2Model, GPT2Tokenizer
+
+# # Load GPT-2 small (without LM head)
+# model_name = "gpt2"
+# model = GPT2Model.from_pretrained(model_name)
+# model.eval()
+
+# tokenizer = GPT2Tokenizer.from_pretrained(model_name)
+# tokenizer.pad_token = tokenizer.eos_token
+
+# # Input prompt
+# input_text = "The capital of France is"
+# inputs = tokenizer(input_text, return_tensors="pt")
+# input_ids = inputs["input_ids"]
+
+# # -------- Hook to capture c_attn output (QKV combined) --------
+# c_attn_activations = {}
+
+# def c_attn_hook(module, input, output):
+#     # output shape: [batch, seq_len, 3 * hidden_size]
+#     c_attn_activations["value"] = output.detach()
+
+# # Register hook on first transformer block's c_attn
+# hook = model.h[0].attn.c_attn.register_forward_hook(c_attn_hook)
+
+# # -------- Run model --------
+# with torch.no_grad():
+#     _ = model(input_ids)
+
+# # Remove hook
+# hook.remove()
+
+# # Extract Q, K, V
+# qkv = c_attn_activations["value"]     # [1, seq, 2304]
+# hidden_size = model.config.hidden_size   # 768
+
+# # Select the second token (index = 1)
+# token_qkv = qkv[0, 1]                 # [2304]
+
+# # Split into Q, K, V
+# Q = token_qkv[:hidden_size]
+# K = token_qkv[hidden_size:2*hidden_size]
+# V = token_qkv[2*hidden_size:3*hidden_size]
+
+# print("Q shape:", Q.shape)
+# print("K shape:", K.shape)
+# print("V shape:", V.shape)
+
+# print("\nQ vector:\n", Q)
+# print("\nK vector:\n", K)
+# print("\nV vector:\n", V)
+
 import torch
 from transformers import GPT2Model, GPT2Tokenizer
 
@@ -128,39 +181,31 @@ input_text = "The capital of France is"
 inputs = tokenizer(input_text, return_tensors="pt")
 input_ids = inputs["input_ids"]
 
-# -------- Hook to capture c_attn output (QKV combined) --------
-c_attn_activations = {}
+# -------- Hook to capture attn_output (after attention, before c_proj) --------
+attn_output_capture = {}
 
-def c_attn_hook(module, input, output):
-    # output shape: [batch, seq_len, 3 * hidden_size]
-    c_attn_activations["value"] = output.detach()
+def attn_hook(module, input, output):
+    """
+    module: GPT2Attention
+    output: attn_output already combined across heads, shape [batch, seq, hidden]
+    """
+    attn_output = output[0]
+    attn_output_capture["value"] = attn_output.detach()
 
-# Register hook on first transformer block's c_attn
-hook = model.h[0].attn.c_attn.register_forward_hook(c_attn_hook)
+# Register hook on first transformer block's attention module
+hook = model.h[0].attn.register_forward_hook(attn_hook)
 
 # -------- Run model --------
 with torch.no_grad():
     _ = model(input_ids)
 
-# Remove hook
 hook.remove()
 
-# Extract Q, K, V
-qkv = c_attn_activations["value"]     # [1, seq, 2304]
-hidden_size = model.config.hidden_size   # 768
+# Extract attention output BEFORE c_proj
+attn_output = attn_output_capture["value"]    # [1, seq_len, hidden_size]
 
-# Select the second token (index = 1)
-token_qkv = qkv[0, 1]                 # [2304]
+# Select second token (index = 1)
+second_token_attn = attn_output[0, 1]         # [hidden_size]
 
-# Split into Q, K, V
-Q = token_qkv[:hidden_size]
-K = token_qkv[hidden_size:2*hidden_size]
-V = token_qkv[2*hidden_size:3*hidden_size]
-
-print("Q shape:", Q.shape)
-print("K shape:", K.shape)
-print("V shape:", V.shape)
-
-print("\nQ vector:\n", Q)
-print("\nK vector:\n", K)
-print("\nV vector:\n", V)
+print("Attention output shape:", attn_output.shape)
+print("\nSecond-token attention output (before c_proj):\n", second_token_attn)
