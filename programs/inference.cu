@@ -12,6 +12,16 @@
 #include "gpt2/layers/residual.h"
 #include "gpt2/layers/gelu.h"
 
+// Include implementations for device function access in megakernel
+#include "../src/gpt2.cu"
+#include "../src/tensor.cu"
+#include "../src/layers/embedding.cu"
+#include "../src/layers/layernorm.cu"
+#include "../src/layers/mlp.cu"
+#include "../src/layers/attention.cu"
+#include "../src/layers/residual.cu"
+#include "../src/layers/gelu.cu"
+
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
 
 config_t config = {
@@ -43,6 +53,8 @@ void free_inference_buffers(inference_buffers_t *buffers);
 int setup_inference_buffers(inference_buffers_t *buffers);
 void forward(const int *d_input_tokens, int seq_len);
 int extract_greedy_token(int seq_len, tensor_t *logits);
+
+__global__ void forward_mk(config_t config, gpt2_t model, inference_buffers_t buffers, const int *d_input_tokens, int seq_len);
 
 int main() {
     printf("GPT-2 inference\n");
@@ -96,7 +108,8 @@ int main() {
     cudaEventRecord(start);
 
     // Forward pass
-    forward(d_input_tokens, seq_len);
+    // forward(d_input_tokens, seq_len);
+    forward_mk<<<256, 256>>>(config, model, buffers, d_input_tokens, seq_len);
     cudaDeviceSynchronize();
 
     // Stop timing and calculate elapsed time
@@ -223,13 +236,12 @@ __device__ void syncblocks(int total_blocks, int stage) {
 __global__
 void forward_mk(config_t config, gpt2_t model, const inference_buffers_t buffers, const int *d_input_tokens, int seq_len) {
     int phase = 0;
-
+    int num_blocks = gridDim.x;
 
     for(int i = blockIdx.x ; i < 1; i += num_blocks){
         embedding_forward_mk(buffers.res->data, d_input_tokens, model.emb.wte->data, model.emb.wpe->data, seq_len, config.n_embd, config.vocab_size, config.n_positions, i);
     }
     syncblocks(gridDim.x, phase++);
-
 
     // layers
     for (int layer_idx = 0; layer_idx < config.n_layer; layer_idx++) {

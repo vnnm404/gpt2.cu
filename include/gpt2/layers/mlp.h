@@ -7,4 +7,6 @@
 
 __global__ void mlp_forward(float *out, const float *input, const float *w, const float *b, int batch_size, int seq_len, int input_dim, int output_dim);
 
+__device__ void mlp_forward_mk(float *out, const float *input, const float *w, const float *b, int batch_size, int seq_len, int input_dim, int output_dim, int bidx);
+
 #endif /* GPT2_LAYERS_MLP_H */

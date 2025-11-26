@@ -7,4 +7,6 @@
 
 __global__ void layernorm_forward(float *out, float *input, float *weight, float *bias, int seq_len, int n_embd);
 
+__device__ void layernorm_forward_mk(float *out, float *input, float *weight, float *bias, int seq_len, int n_embd, int bidx);
+
 #endif /* GPT2_LAYERS_LAYERNORM_H */

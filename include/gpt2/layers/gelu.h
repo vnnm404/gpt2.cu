@@ -7,4 +7,6 @@
 
 __global__ void gelu_forward(float *out, const float *input, int batch_size, int seq_len, int n_embd);
 
+__device__ void gelu_forward_mk(float *out, const float *input, int batch_size, int seq_len, int n_embd, int bidx);
+
 #endif /* GPT2_LAYERS_GELU_H */
