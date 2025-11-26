@@ -195,6 +195,111 @@ int setup_inference_buffers(inference_buffers_t *buffers) {
     return 0;
 }
 
+
+#define MAX_SYNC 1000 
+
+__device__ int g_block_counter[MAX_SYNC];  // must be zero-initialized
+
+__device__ void syncblocks(int total_blocks, int stage) {
+    // Stage corresponds to g_block_counter[stage]
+
+    __syncthreads();
+
+    // One thread per block increments stage counter
+    if (threadIdx.x == 0) {
+        atomicAdd(&g_block_counter[stage], 1);
+    }
+
+    __syncthreads();
+
+    // Spin until all blocks arrive
+    while (atomicAdd(&g_block_counter[stage], 0) < total_blocks) {
+        __threadfence();  // ensure visibility across SMs
+    }
+
+    __syncthreads();
+}
+
+__global__
+void forward_mk(config_t config, gpt2_t model, const inference_buffers_t buffers, const int *d_input_tokens, int seq_len) {
+    int phase = 0;
+
+
+    for(int i = blockIdx.x ; i < 1; i += num_blocks){
+        embedding_forward_mk(buffers.res->data, d_input_tokens, model.emb.wte->data, model.emb.wpe->data, seq_len, config.n_embd, config.vocab_size, config.n_positions, i);
+    }
+    syncblocks(gridDim.x, phase++);
+
+
+    // layers
+    for (int layer_idx = 0; layer_idx < config.n_layer; layer_idx++) {
+        block_t *block = &model.h[layer_idx];
+
+        for(int i = blockIdx.x ; i < 1; i += num_blocks)
+        layernorm_forward_mk(buffers.buf1->data, buffers.res->data, block->ln_1.w->data, block->ln_1.b->data, seq_len, config.n_embd, i);
+    
+        syncblocks(gridDim.x, phase++);
+
+        for(int i = blockIdx.x ; i < CEIL_DIV(seq_len * 3 * config.n_embd, 256); i += num_blocks)
+        mlp_forward_mk(buffers.buf2->data, buffers.buf1->data, block->attn.qkv_w->data, block->attn.qkv_b->data, 1, seq_len, config.n_embd, config.n_embd * 3, i);
+
+        syncblocks(gridDim.x, phase++);
+
+        for(int i = blockIdx.x ; i < CEIL_DIV(1 * seq_len * config.n_head, 256); i += num_blocks)
+        attention_forward_mk(buffers.buf1->data, buffers.preatt->data, buffers.att->data, buffers.buf2->data, 1, seq_len, config.n_head, config.n_embd, i);
+
+        syncblocks(gridDim.x, phase++);
+
+        for(int i = blockIdx.x ; i < CEIL_DIV(1 * seq_len * config.n_embd, 256); i += num_blocks)
+        mlp_forward_mk(buffers.buf2->data, buffers.buf1->data, block->attn.proj_w->data, block->attn.proj_b->data, 1, seq_len, config.n_embd, config.n_embd, i);
+
+        syncblocks(gridDim.x, phase++);
+
+        for(int i = blockIdx.x ; i < CEIL_DIV(1 * seq_len * config.n_embd, 256); i += num_blocks)
+        residual_forward_mk(buffers.res->data, buffers.buf2->data, buffers.res->data, 1, seq_len, config.n_embd, i);
+
+        syncblocks(gridDim.x, phase++);
+
+        for(int i = blockIdx.x ; i < 1; i += num_blocks)
+        layernorm_forward_mk(buffers.buf1->data, buffers.res->data, block->ln_2.w->data, block->ln_2.b->data, seq_len, config.n_embd, i);
+
+        syncblocks(gridDim.x, phase++);
+
+        for(int i = blockIdx.x ; i < CEIL_DIV(seq_len * 4 * config.n_embd, 256); i += num_blocks)
+        mlp_forward_mk(buffers.buf2->data, buffers.buf1->data, block->mlp.fc_w->data, block->mlp.fc_b->data, 1, seq_len, config.n_embd, config.n_embd * 4, i);
+
+        syncblocks(gridDim.x, phase++);
+
+        for(int i = blockIdx.x ; i < CEIL_DIV(1 * seq_len * config.n_embd * 4, 256); i += num_blocks)
+        gelu_forward_mk(buffers.buf1->data, buffers.buf2->data, 1, seq_len, config.n_embd * 4, i);
+
+        syncblocks(gridDim.x, phase++);
+
+        for(int i = blockIdx.x ; i < CEIL_DIV(1 * seq_len * config.n_embd, 256); i += num_blocks)
+        mlp_forward_mk(buffers.buf2->data, buffers.buf1->data, block->mlp.proj_w->data, block->mlp.proj_b->data, 1, seq_len, config.n_embd * 4, config.n_embd, i);
+
+        syncblocks(gridDim.x, phase++);
+
+        for(int i = blockIdx.x ; i < CEIL_DIV(1 * seq_len * config.n_embd, 256); i += num_blocks)
+        residual_forward_mk(buffers.res->data, buffers.buf2->data, buffers.res->data, 1, seq_len, config.n_embd, i);
+        
+        syncblocks(gridDim.x, phase++);
+ 
+    }
+
+    for(int i = blockIdx.x ; i < 1; i += num_blocks)
+    layernorm_forward_mk(buffers.res->data, buffers.res->data, model.ln_f.w->data, model.ln_f.b->data, seq_len, config.n_embd, i);
+
+    syncblocks(gridDim.x, phase++);
+
+
+    for(int i = blockIdx.x ; i < CEIL_DIV(1 * seq_len * config.vocab_size, 256); i += num_blocks){
+        mlp_forward_mk(buffers.logits->data, buffers.res->data, model.emb.wte->data, NULL, 1, seq_len, config.n_embd, config.vocab_size, i);
+    }
+    // print first 4 
+}
+
+
 void forward(const int *d_input_tokens, int seq_len) {
     embedding_forward<<<1, 256>>>(buffers.res->data, d_input_tokens, model.emb.wte->data, model.emb.wpe->data, seq_len, config.n_embd, config.vocab_size, config.n_positions);
 

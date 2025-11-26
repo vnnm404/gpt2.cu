@@ -15,3 +15,13 @@ __global__ void residual_forward(float *out, const float *input, const float *re
 
     out[idx] = input[idx] + residual[idx];
 }
+
+
+__device__ void residual_forward_mk(float *out, const float *input, const float *residual, int batch_size, int seq_len, int n_embd, int bidx) {
+    int idx = bidx * blockDim.x + threadIdx.x;
+    int total_threads = batch_size * seq_len * n_embd;
+
+    if (idx >= total_threads) return;
+
+    out[idx] = input[idx] + residual[idx];
+}
