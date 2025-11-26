@@ -68,6 +68,36 @@ typedef struct
     ln_t ln_f;
 } gpt2_t;
 
+typedef struct {
+    // --- embeddings ---
+    float *wte;  // (h, V)
+    float *wpe;  // (maxT, h)
+
+    // --- blocks ---
+    float *ln_1_w[NUM_LAYERS];   // (h)
+    float *ln_1_b[NUM_LAYERS];   // (h)
+
+    float *qkv_w[NUM_LAYERS];    // (h, 3*h)
+    float *qkv_b[NUM_LAYERS];    // (3*h)
+
+    float *proj_w[NUM_LAYERS];   // (h, h)
+    float *proj_b[NUM_LAYERS];   // (h)
+
+    float *ln_2_w[NUM_LAYERS];   // (h)
+    float *ln_2_b[NUM_LAYERS];   // (h)
+
+    float *fc_w[NUM_LAYERS];     // (h, 4*h)
+    float *fc_b[NUM_LAYERS];     // (4*h)
+
+    float *fc_proj_w[NUM_LAYERS]; // (4*h, h)
+    float *fc_proj_b[NUM_LAYERS]; // (h)
+
+    // --- final layernorm ---
+    float *ln_f_w;  // (h)
+    float *ln_f_b;  // (h)
+} flat_gpt2_t;
+
+
 int gpt2_initialize(gpt2_t *model, const config_t *config);
 int gpt2_load_weights(gpt2_t *model, FILE *file);
 void gpt2_free(gpt2_t *model);
