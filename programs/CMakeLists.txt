@@ -11,8 +11,10 @@ foreach(PROGRAM_SOURCE ${PROGRAM_SOURCES})
     # Create executable
     add_executable(${PROGRAM_NAME} ${PROGRAM_SOURCE})
     
-    # Link with gpt2 library
-    target_link_libraries(${PROGRAM_NAME} gpt2)
+    # inference.cu includes layer sources directly, others link with gpt2 library
+    if(NOT PROGRAM_NAME STREQUAL "inference")
+        target_link_libraries(${PROGRAM_NAME} gpt2)
+    endif()
     
     # Set CUDA properties
     set_source_files_properties(${PROGRAM_SOURCE} PROPERTIES LANGUAGE CUDA)

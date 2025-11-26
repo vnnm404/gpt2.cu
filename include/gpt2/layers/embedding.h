@@ -7,4 +7,6 @@
 
 __global__ void embedding_forward(float *out, const int *input_tokens, const float *wte, const float *wpe, int seq_len, int n_embd, int vocab_size, int n_positions);
 
+__device__ void embedding_forward_mk(float *out, const int *input_tokens, const float *wte, const float *wpe, int seq_len, int n_embd, int vocab_size, int n_positions, int bidx);
+
 #endif /* GPT2_LAYERS_EMBEDDING_H */
