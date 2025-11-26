@@ -17,13 +17,13 @@
 
 typedef struct
 {
-    int vocab_size;        // vocab size, e.g. 50257
-    int padded_vocab_size; // padded to e.g. %128==0, 50304
-    int n_layer;           // number of layers, e.g. 12
-    int n_head;            // number of heads in attention, e.g. 12
-    int n_embd;            // number of channels, e.g. 768
-    int n_positions;       // max sequence length, e.g. 1024
-    int n_ctx;             // context size, e.g. 1024
+    int vocab_size;  // vocab size, e.g. 50257
+    int batch_size;  // batch size, e.g. 1
+    int n_layer;     // number of layers, e.g. 12
+    int n_head;      // number of heads in attention, e.g. 12
+    int n_embd;      // number of channels, e.g. 768
+    int n_positions; // max sequence length, e.g. 1024
+    int n_ctx;       // context size, e.g. 1024
 } config_t;
 
 typedef struct
@@ -54,7 +54,8 @@ typedef struct
     tensor_t *proj_b; // (h)
 } ffn_t;
 
-typedef struct {
+typedef struct
+{
     ln_t ln_1;
     attn_t attn;
     ln_t ln_2;

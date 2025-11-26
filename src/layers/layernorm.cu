@@ -10,7 +10,8 @@ __global__ void layernorm_forward(float *out, float *input, float *weight, float
     int batch_idx = blockIdx.x;
     int seq_idx = threadIdx.x;
 
-    if (seq_idx < n_embd) {
+    // threadIdx.x indexes sequence positions (time steps), so compare against seq_len
+    if (seq_idx < seq_len) {
         float *x = input + (batch_idx * seq_len * n_embd) + (seq_idx * n_embd);
 
         // mean

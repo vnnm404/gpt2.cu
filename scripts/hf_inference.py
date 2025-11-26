@@ -10,8 +10,10 @@ tokenizer = GPT2Tokenizer.from_pretrained(model_name)
 tokenizer.pad_token = tokenizer.eos_token  # set pad token
 
 # Input prompt
-input_text = "The capital of France is"
+input_text = "Robots might take our"
 input_ids = tokenizer(input_text, return_tensors="pt")["input_ids"]
+
+print("Input IDs:", input_ids)
 
 # Number of tokens to generate
 num_tokens_to_generate = 10

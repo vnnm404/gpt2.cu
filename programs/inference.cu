@@ -16,7 +16,6 @@
 
 config_t config = {
     .vocab_size = 50257,
-    .padded_vocab_size = 50304,
     .n_layer = 12,
     .n_head = 12,
     .n_embd = 768,
@@ -71,8 +70,9 @@ int main() {
     printf("Model loaded successfully.\n");
 
     // sample tokens: "The capital of France is"
-    int input_tokens[] = {464, 3139, 286, 4881, 318, 262, 3139, 286};  
-    int seq_len = 8;
+    // int input_tokens[] = {464, 3139, 286, 4881, 318, 262, 3139, 286};  
+    int input_tokens[] = {14350, 1747, 1244, 1011, 674};  // "Robots might take our"
+    int seq_len = 5;
     
     int *d_input_tokens;
     if (prepare_input_tokens(input_tokens, seq_len, &d_input_tokens) != 0) {
