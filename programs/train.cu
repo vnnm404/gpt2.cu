@@ -13,6 +13,7 @@
 #include "gpt2/layers/gelu.h"
 #include "gpt2/layers/softmax.h"
 #include "gpt2/layers/cross_entropy.h"
+#include "gpt2/layers/adamw.h"
 
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
 
@@ -77,12 +78,27 @@ typedef struct
 train_buffers_t buffers;
 train_buffers_t g_buffers;
 
+// AdamW optimizer state
+typedef struct {
+    float *m_memory;  // first moment estimates
+    float *v_memory;  // second moment estimates
+    float learning_rate;
+    float beta1;
+    float beta2;
+    float eps;
+    float weight_decay;
+    int t;  // timestep
+} adamw_state_t;
+
+adamw_state_t opt_state;
+
 int prepare_input_tokens(int *input_tokens, int seq_len, int **d_input_tokens, int **d_target_tokens);
 int setup_train_buffers(train_buffers_t *buffers, int seq_len);
 void free_train_buffers(train_buffers_t *buffers);
 void forward(const int *d_input_tokens, int seq_len);
 void cross_entropy(const int *d_target_tokens, int seq_len);
 void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len);
+void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt);
 int extract_greedy_token(int seq_len, tensor_t *logits);
 
 int main()
@@ -118,6 +134,16 @@ int main()
 
     printf("Model loaded successfully.\n");
 
+    // Initialize AdamW optimizer state
+    opt_state.learning_rate = 3e-4f;
+    opt_state.beta1 = 0.9f;
+    opt_state.beta2 = 0.999f;
+    opt_state.eps = 1e-8f;
+    opt_state.weight_decay = 0.1f;
+    opt_state.t = 0;
+    opt_state.m_memory = NULL;  // lazily allocated
+    opt_state.v_memory = NULL;  // lazily allocated
+
     int input_tokens[] = {
         464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
         464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
@@ -144,6 +170,14 @@ int main()
     cross_entropy(d_target_tokens, seq_len);
     backward(d_input_tokens, d_target_tokens, seq_len);
 
+    gpt2_update(&model, &g_model, &opt_state);
+
+    forward(d_input_tokens, seq_len);
+    cross_entropy(d_target_tokens, seq_len);
+    backward(d_input_tokens, d_target_tokens, seq_len);
+
+    gpt2_update(&model, &g_model, &opt_state);
+
     gpuErrchk(cudaDeviceSynchronize());
 
     cudaEventRecord(stop);
@@ -162,6 +196,11 @@ int main()
     gpuErrchk(cudaFree(d_input_tokens));
     free_train_buffers(&buffers);
     free_train_buffers(&g_buffers);
+    
+    // Free optimizer state
+    if (opt_state.m_memory) cudaFree(opt_state.m_memory);
+    if (opt_state.v_memory) cudaFree(opt_state.v_memory);
+    
     gpt2_free(&model);
     gpt2_free(&g_model);
     return 0;
@@ -316,11 +355,8 @@ void forward(const int *d_input_tokens, int seq_len)
         layernorm_forward<<<B, thr>>>(layer_bufs->ln_1->data, res->data, block->ln_1.w->data, block->ln_1.b->data, layer_bufs->ln_1_mean->data, layer_bufs->ln_1_rstd->data, S, h);
 
         mlp_forward<<<CEIL_DIV(B * S * 3 * h, thr), thr>>>(layer_bufs->qkv->data, layer_bufs->ln_1->data, block->attn.qkv_w->data, block->attn.qkv_b->data, B, S, h, h * 3);
-        gpuErrchk(cudaGetLastError());
 
         attention_forward<<<CEIL_DIV(B * S * n_head, thr), thr>>>(layer_bufs->atty->data, layer_bufs->preatt->data, layer_bufs->att->data, layer_bufs->qkv->data, B, S, n_head, h);
-        gpuErrchk(cudaGetLastError());
-        gpuErrchk(cudaDeviceSynchronize());
 
         mlp_forward<<<CEIL_DIV(B * S * h, thr), thr>>>(layer_bufs->att_proj->data, layer_bufs->atty->data, block->attn.proj_w->data, block->attn.proj_b->data, B, S, h, h);
         residual_forward<<<CEIL_DIV(B * S * h, thr), thr>>>(layer_bufs->res_2->data, layer_bufs->att_proj->data, res->data, B, S, h);
@@ -420,6 +456,42 @@ void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len
 
     // Backward through embedding layer
     embedding_backward<<<CEIL_DIV(B * S, thr), thr>>>(g_model.emb.wte->data, g_model.emb.wpe->data, g_buffers.encoded->data, d_input_tokens, B, S, h);
+}
+
+void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt) {
+    // Lazily allocate optimizer state memory on first call
+    if (opt->m_memory == NULL) {
+        size_t num_params = model->num_parameters;
+        gpuErrchk(cudaMalloc(&opt->m_memory, num_params * sizeof(float)));
+        gpuErrchk(cudaMalloc(&opt->v_memory, num_params * sizeof(float)));
+        
+        // Initialize to zero
+        gpuErrchk(cudaMemset(opt->m_memory, 0, num_params * sizeof(float)));
+        gpuErrchk(cudaMemset(opt->v_memory, 0, num_params * sizeof(float)));
+    }
+    
+    // Increment timestep
+    opt->t++;
+    
+    // Launch AdamW kernel
+    int thr = 256;
+    int num_blocks = CEIL_DIV(model->num_parameters, thr);
+    
+    adamw_kernel<<<num_blocks, thr>>>(
+        model->params_memory,
+        grads->params_memory,
+        opt->m_memory,
+        opt->v_memory,
+        model->num_parameters,
+        opt->learning_rate,
+        opt->beta1,
+        opt->beta2,
+        opt->eps,
+        opt->weight_decay,
+        opt->t
+    );
+    
+    gpuErrchk(cudaGetLastError());
 }
 
 int extract_greedy_token(int seq_len, tensor_t *logits) {

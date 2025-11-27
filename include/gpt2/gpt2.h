@@ -67,6 +67,8 @@ typedef struct
     emb_t emb;
     block_t h[NUM_LAYERS];
     ln_t ln_f;
+    float *params_memory; // base pointer for contiguous parameter memory
+    size_t num_parameters; // total number of parameters
 } gpt2_t;
 
 int gpt2_initialize(gpt2_t *model, const config_t *config);
