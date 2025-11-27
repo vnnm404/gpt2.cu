@@ -202,7 +202,7 @@ void forward(const int *d_input_tokens, int seq_len) {
     for (int layer_idx = 0; layer_idx < config.n_layer; layer_idx++) {
         block_t *block = &model.h[layer_idx];
 
-        layernorm_forward<<<1, 256>>>(buffers.buf1->data, buffers.res->data, block->ln_1.w->data, block->ln_1.b->data, seq_len, config.n_embd);
+        layernorm_forward<<<1, 256>>>(buffers.buf1->data, buffers.res->data, block->ln_1.w->data, block->ln_1.b->data, NULL, NULL, seq_len, config.n_embd);
 
         mlp_forward<<<CEIL_DIV(seq_len * 3 * config.n_embd, 256), 256>>>(buffers.buf2->data, buffers.buf1->data, block->attn.qkv_w->data, block->attn.qkv_b->data, 1, seq_len, config.n_embd, config.n_embd * 3);
 
@@ -212,7 +212,7 @@ void forward(const int *d_input_tokens, int seq_len) {
 
         residual_forward<<<CEIL_DIV(1 * seq_len * config.n_embd, 256), 256>>>(buffers.res->data, buffers.buf2->data, buffers.res->data, 1, seq_len, config.n_embd);
 
-        layernorm_forward<<<1, 256>>>(buffers.buf1->data, buffers.res->data, block->ln_2.w->data, block->ln_2.b->data, seq_len, config.n_embd);
+        layernorm_forward<<<1, 256>>>(buffers.buf1->data, buffers.res->data, block->ln_2.w->data, block->ln_2.b->data, NULL, NULL, seq_len, config.n_embd);
 
         mlp_forward<<<CEIL_DIV(seq_len * 4 * config.n_embd, 256), 256>>>(buffers.buf2->data, buffers.buf1->data, block->mlp.fc_w->data, block->mlp.fc_b->data, 1, seq_len, config.n_embd, config.n_embd * 4);
 
@@ -223,7 +223,7 @@ void forward(const int *d_input_tokens, int seq_len) {
         residual_forward<<<CEIL_DIV(1 * seq_len * config.n_embd, 256), 256>>>(buffers.res->data, buffers.buf2->data, buffers.res->data, 1, seq_len, config.n_embd);
     }
 
-    layernorm_forward<<<1, 256>>>(buffers.res->data, buffers.res->data, model.ln_f.w->data, model.ln_f.b->data, seq_len, config.n_embd);
+    layernorm_forward<<<1, 256>>>(buffers.res->data, buffers.res->data, model.ln_f.w->data, model.ln_f.b->data, NULL, NULL, seq_len, config.n_embd);
 
     mlp_forward<<<CEIL_DIV(1 * seq_len * config.vocab_size, 256), 256>>>(buffers.logits->data, buffers.res->data, model.emb.wte->data, NULL, 1, seq_len, config.n_embd, config.vocab_size);
 

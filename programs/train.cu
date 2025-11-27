@@ -11,6 +11,8 @@
 #include "gpt2/layers/attention.h"
 #include "gpt2/layers/residual.h"
 #include "gpt2/layers/gelu.h"
+#include "gpt2/layers/softmax.h"
+#include "gpt2/layers/cross_entropy.h"
 
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
 
@@ -30,7 +32,7 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort =
 
 config_t config = {
     .vocab_size = 50257,
-    .batch_size = 1,
+    .batch_size = 8,
     .n_layer = 12,
     .n_head = 12,
     .n_embd = 768,
@@ -72,11 +74,14 @@ typedef struct
 } train_buffers_t;
 
 train_buffers_t buffers;
+train_buffers_t grad_buffers;
 
-int prepare_input_tokens(int *input_tokens, int seq_len, int **d_input_tokens);
+int prepare_input_tokens(int *input_tokens, int seq_len, int **d_input_tokens, int **d_target_tokens);
 int setup_train_buffers(train_buffers_t *buffers, int seq_len);
 void free_train_buffers(train_buffers_t *buffers);
 void forward(const int *d_input_tokens, int seq_len);
+void cross_entropy(const int *d_target_tokens, int seq_len);
+void backward();
 int extract_greedy_token(int seq_len, tensor_t *logits);
 
 int main()
@@ -107,8 +112,6 @@ int main()
     printf("Model loaded successfully.\n");
 
     int input_tokens[] = {
-        // 14350, 1747, 1244, 1011, 674
-
         464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
         464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
         464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
@@ -116,36 +119,13 @@ int main()
         464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
         464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
         464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 14350, 1747, 1244, 1011, 674,
         464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 14350, 1747, 1244, 1011, 674,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 14350, 1747, 1244, 1011, 674,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 14350, 1747, 1244, 1011, 674,
     };
-    int seq_len = 10 * 32;
-    int *d_input_tokens;
-    prepare_input_tokens(input_tokens, config.batch_size * seq_len, &d_input_tokens);
+    int seq_len = 10;
+    int *d_input_tokens, *d_target_tokens;
+    prepare_input_tokens(input_tokens, config.batch_size * seq_len, &d_input_tokens, &d_target_tokens);
     setup_train_buffers(&buffers, seq_len);
+    seq_len -= 1; // because target is shifted by 1
 
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
@@ -153,6 +133,9 @@ int main()
     cudaEventRecord(start);
 
     forward(d_input_tokens, seq_len);
+    cross_entropy(d_target_tokens, seq_len);
+    backward();
+
     gpuErrchk(cudaDeviceSynchronize());
 
     cudaEventRecord(stop);
@@ -174,10 +157,31 @@ int main()
     return 0;
 }
 
-int prepare_input_tokens(int *input_tokens, int seq_len, int **d_input_tokens)
+int prepare_input_tokens(int *input_tokens, int seq_len, int **d_input_tokens, int **d_target_tokens)
 {
-    gpuErrchk(cudaMalloc((void **)d_input_tokens, seq_len * sizeof(int)));
-    gpuErrchk(cudaMemcpy(*d_input_tokens, input_tokens, seq_len * sizeof(int), cudaMemcpyHostToDevice));
+    // input_tokens: [B, S]
+    // prepare input as input_tokens[:, :seq_len-1] and target as input_tokens[:, 1:seq_len]
+    int size = sizeof(int) * config.batch_size * seq_len;
+    int *h_input = (int *) malloc(size);
+    int *h_target = (int *) malloc(size);
+    for (int b = 0; b < config.batch_size; b++) {
+        for (int s = 0; s < seq_len; s++) {
+            h_input[b * seq_len + s] = input_tokens[b * seq_len + s];
+            if (s > 0) {
+                h_target[b * seq_len + (s - 1)] = input_tokens[b * seq_len + s];
+            }
+        }
+    }
+
+    gpuErrchk(cudaMalloc((void **)d_input_tokens, (seq_len - 1) * sizeof(int)));
+    gpuErrchk(cudaMemcpy(*d_input_tokens, h_input, (seq_len - 1) * sizeof(int), cudaMemcpyHostToDevice));
+
+    gpuErrchk(cudaMalloc((void **)d_target_tokens, (seq_len - 1) * sizeof(int)));
+    gpuErrchk(cudaMemcpy(*d_target_tokens, h_target, (seq_len - 1) * sizeof(int), cudaMemcpyHostToDevice));
+
+    free(h_input);
+    free(h_target);
+
     return 0;
 }
 
@@ -287,7 +291,7 @@ void forward(const int *d_input_tokens, int seq_len)
     int n_head = config.n_head;
     int V = config.vocab_size;
 
-    int thr = 1024;
+    int thr = 256;
 
     embedding_forward<<<B, thr>>>(buffers.encoded->data, d_input_tokens, model.emb.wte->data, model.emb.wpe->data, S, h, V, config.n_positions);
 
@@ -299,7 +303,7 @@ void forward(const int *d_input_tokens, int seq_len)
 
         tensor_t *res = (layer_idx == 0) ? buffers.encoded : buffers.blocks[layer_idx - 1].res_3;
 
-        layernorm_forward<<<B, thr>>>(layer_bufs->ln_1->data, res->data, block->ln_1.w->data, block->ln_1.b->data, S, h);
+        layernorm_forward<<<B, thr>>>(layer_bufs->ln_1->data, res->data, block->ln_1.w->data, block->ln_1.b->data, layer_bufs->ln_1_mean->data, layer_bufs->ln_1_rstd->data, S, h);
 
         mlp_forward<<<CEIL_DIV(B * S * 3 * h, thr), thr>>>(layer_bufs->qkv->data, layer_bufs->ln_1->data, block->attn.qkv_w->data, block->attn.qkv_b->data, B, S, h, h * 3);
         gpuErrchk(cudaGetLastError());
@@ -311,7 +315,7 @@ void forward(const int *d_input_tokens, int seq_len)
         mlp_forward<<<CEIL_DIV(B * S * h, thr), thr>>>(layer_bufs->att_proj->data, layer_bufs->atty->data, block->attn.proj_w->data, block->attn.proj_b->data, B, S, h, h);
         residual_forward<<<CEIL_DIV(B * S * h, thr), thr>>>(layer_bufs->res_2->data, layer_bufs->att_proj->data, res->data, B, S, h);
 
-        layernorm_forward<<<B, thr>>>(layer_bufs->ln_2->data, layer_bufs->res_2->data, block->ln_2.w->data, block->ln_2.b->data, S, h);
+        layernorm_forward<<<B, thr>>>(layer_bufs->ln_2->data, layer_bufs->res_2->data, block->ln_2.w->data, block->ln_2.b->data, layer_bufs->ln_2_mean->data, layer_bufs->ln_2_rstd->data, S, h);
 
         mlp_forward<<<CEIL_DIV(B * S * 4 * h, thr), thr>>>(layer_bufs->mlp_fc->data, layer_bufs->ln_2->data, block->mlp.fc_w->data, block->mlp.fc_b->data, B, S, h, h * 4);
 
@@ -322,9 +326,20 @@ void forward(const int *d_input_tokens, int seq_len)
     }
 
     tensor_t *res = buffers.blocks[L - 1].res_3;
-    layernorm_forward<<<B, thr>>>(buffers.ln_f->data, res->data, model.ln_f.w->data, model.ln_f.b->data, S, h);
+    layernorm_forward<<<B, thr>>>(buffers.ln_f->data, res->data, model.ln_f.w->data, model.ln_f.b->data, buffers.ln_f_mean->data, buffers.ln_f_rstd->data, S, h);
 
     mlp_forward<<<CEIL_DIV(B * S * V, thr), thr>>>(buffers.logits->data, buffers.ln_f->data, model.emb.wte->data, NULL, B, S, h, V);
+
+    softmax_forward<<<CEIL_DIV(B * S * V, thr), thr>>>(buffers.probs->data, buffers.logits->data, B, S, V);
+}
+
+void cross_entropy(const int *d_target_tokens, int seq_len) {
+    int B = config.batch_size;
+    int S = seq_len;
+    int V = config.vocab_size;
+
+    int thr = 256;
+    cross_entropy_forward<<<CEIL_DIV(B * S, thr), thr>>>(buffers.losses->data, buffers.probs->data, d_target_tokens, B, S, V);
 }
 
 void backward() {
