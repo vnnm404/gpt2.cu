@@ -18,3 +18,36 @@ __global__ void cross_entropy_forward(float *losses, const float *probs, const i
         losses[idx] = -logf(fmaxf(prob, 1e-10f)); // Avoid log(0)
     }
 }
+
+__global__ void cross_entropy_backward_init(float *g_losses, int batch_size, int seq_len) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total_elements = batch_size * seq_len;
+
+    if (idx < total_elements) {
+        g_losses[idx] = 1.0f / (batch_size * seq_len);
+    }
+}
+
+__global__ void cross_entropy_backward(float *g_logits, float *g_losses, float *probs, const int *targets, int batch_size, int seq_len, int vocab_size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total_elements = batch_size * seq_len;
+
+    if (idx < total_elements) {
+        int t = idx % seq_len;
+        int batch_idx = idx / seq_len;
+
+        // Pointers to logits gradient and probs for this (batch, time) position
+        float *dlogits_bt = g_logits + batch_idx * seq_len * vocab_size + t * vocab_size;
+        float *probs_bt = probs + batch_idx * seq_len * vocab_size + t * vocab_size;
+        
+        float dloss = g_losses[batch_idx * seq_len + t];
+        int target_token = targets[batch_idx * seq_len + t];
+
+        // Compute gradient for all vocab positions
+        for (int i = 0; i < vocab_size; i++) {
+            float p = probs_bt[i];
+            float indicator = (i == target_token) ? 1.0f : 0.0f;
+            dlogits_bt[i] += (p - indicator) * dloss;
+        }
+    }
+}

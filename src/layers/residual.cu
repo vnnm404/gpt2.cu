@@ -15,3 +15,12 @@ __global__ void residual_forward(float *out, const float *input, const float *re
 
     out[idx] = input[idx] + residual[idx];
 }
+
+__global__ void residual_backward(float *g_inp1, float *g_inp2, const float *g_out, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx >= N) return;
+    
+    g_inp1[idx] += g_out[idx];
+    g_inp2[idx] += g_out[idx];
+}

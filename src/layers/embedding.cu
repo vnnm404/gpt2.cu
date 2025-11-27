@@ -22,3 +22,29 @@ __global__ void embedding_forward(float *out, const int *input_tokens, const flo
         }
     }
 }
+
+// CUDA kernel for embedding backward pass
+// g_wte: [C, vocab_size] gradients for token embeddings
+// g_wpe: [n_positions, C] gradients for position embeddings
+// g_out: [B, T, C] gradients from output
+// inp: [B, T] input token indices
+__global__ void embedding_backward(float *g_wte, float *g_wpe, const float *g_out, const int *inp, int B, int T, int C) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total_threads = B * T;
+    
+    if (idx >= total_threads) return;
+    
+    int b = idx / T;
+    int t = idx % T;
+    
+    const float *g_out_bt = g_out + b * T * C + t * C;
+    int ix = inp[b * T + t];
+    float *g_wte_ix = g_wte + ix * C;
+    float *g_wpe_t = g_wpe + t * C;
+    
+    for (int i = 0; i < C; i++) {
+        float d = g_out_bt[i];
+        atomicAdd(&g_wte_ix[i], d);
+        atomicAdd(&g_wpe_t[i], d);
+    }
+}

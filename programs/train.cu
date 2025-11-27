@@ -40,6 +40,7 @@ config_t config = {
     .n_ctx = 1024};
 
 gpt2_t model;
+gpt2_t g_model;  // model weight gradients
 
 typedef struct
 {
@@ -74,14 +75,14 @@ typedef struct
 } train_buffers_t;
 
 train_buffers_t buffers;
-train_buffers_t grad_buffers;
+train_buffers_t g_buffers;
 
 int prepare_input_tokens(int *input_tokens, int seq_len, int **d_input_tokens, int **d_target_tokens);
 int setup_train_buffers(train_buffers_t *buffers, int seq_len);
 void free_train_buffers(train_buffers_t *buffers);
 void forward(const int *d_input_tokens, int seq_len);
 void cross_entropy(const int *d_target_tokens, int seq_len);
-void backward();
+void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len);
 int extract_greedy_token(int seq_len, tensor_t *logits);
 
 int main()
@@ -90,6 +91,12 @@ int main()
 
     if (gpt2_initialize(&model, &config) != 0) {
         fprintf(stderr, "Failed to initialize GPT-2 model\n");
+        return -1;
+    }
+
+    if (gpt2_initialize(&g_model, &config) != 0) {
+        fprintf(stderr, "Failed to initialize GPT-2 gradient model\n");
+        gpt2_free(&model);
         return -1;
     }
 
@@ -125,6 +132,7 @@ int main()
     int *d_input_tokens, *d_target_tokens;
     prepare_input_tokens(input_tokens, config.batch_size * seq_len, &d_input_tokens, &d_target_tokens);
     setup_train_buffers(&buffers, seq_len);
+    setup_train_buffers(&g_buffers, seq_len);
     seq_len -= 1; // because target is shifted by 1
 
     cudaEvent_t start, stop;
@@ -134,7 +142,7 @@ int main()
 
     forward(d_input_tokens, seq_len);
     cross_entropy(d_target_tokens, seq_len);
-    backward();
+    backward(d_input_tokens, d_target_tokens, seq_len);
 
     gpuErrchk(cudaDeviceSynchronize());
 
@@ -153,7 +161,9 @@ int main()
 
     gpuErrchk(cudaFree(d_input_tokens));
     free_train_buffers(&buffers);
+    free_train_buffers(&g_buffers);
     gpt2_free(&model);
+    gpt2_free(&g_model);
     return 0;
 }
 
@@ -342,8 +352,74 @@ void cross_entropy(const int *d_target_tokens, int seq_len) {
     cross_entropy_forward<<<CEIL_DIV(B * S, thr), thr>>>(buffers.losses->data, buffers.probs->data, d_target_tokens, B, S, V);
 }
 
-void backward() {
-    // TODO: store means and rstd in the layernorm fwd
+void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len) {
+    int L = config.n_layer;
+    int B = config.batch_size;
+    int S = seq_len;
+    int h = config.n_embd;
+    int n_head = config.n_head;
+    int V = config.vocab_size;
+
+    int thr = 256;
+
+    cross_entropy_backward_init<<<CEIL_DIV(B * S, thr), thr>>>(g_buffers.losses->data, B, S);
+    cross_entropy_backward<<<CEIL_DIV(B * S * V, thr), thr>>>(g_buffers.logits->data, g_buffers.losses->data, buffers.probs->data, d_target_tokens, B, S, V);
+
+    mlp_backward_input<<<CEIL_DIV(B * S, thr), thr>>>(g_buffers.ln_f->data, g_buffers.logits->data, model.emb.wte->data, B, S, h, V);
+    mlp_backward_weight<<<CEIL_DIV(B * S * h, thr), thr>>>(g_model.emb.wte->data, NULL, g_buffers.logits->data, buffers.ln_f->data, B, S, h, V);
+
+    tensor_t *res = buffers.blocks[L - 1].res_3;
+    tensor_t *g_res = g_buffers.blocks[L - 1].res_3;
+
+    layernorm_backward<<<B, thr>>>(g_res->data, g_model.ln_f.w->data, g_model.ln_f.b->data, g_buffers.ln_f->data, res->data, model.ln_f.w->data, buffers.ln_f_mean->data, buffers.ln_f_rstd->data, B, S, h);
+
+    for (int layer_idx = L - 1; layer_idx >= 0; layer_idx--)
+    {
+        block_t *block = &model.h[layer_idx];
+        block_t *g_block = &g_model.h[layer_idx];
+        layer_buffers_t *layer_bufs = &buffers.blocks[layer_idx];
+        layer_buffers_t *g_layer_bufs = &g_buffers.blocks[layer_idx];
+
+        tensor_t *res = (layer_idx == 0) ? buffers.encoded : buffers.blocks[layer_idx - 1].res_3;
+        tensor_t *g_res = (layer_idx == 0) ? g_buffers.encoded : g_buffers.blocks[layer_idx - 1].res_3;
+
+        // Backward through residual connection 3: res_3 = mlp_proj + res_2
+        residual_backward<<<CEIL_DIV(B * S * h, thr), thr>>>(g_layer_bufs->res_2->data, g_layer_bufs->mlp_proj->data, g_layer_bufs->res_3->data, B * S * h);
+
+        // Backward through MLP projection: mlp_proj = mlp_fc_gelu @ proj_w + proj_b
+        mlp_backward_input<<<CEIL_DIV(B * S * 4 * h, thr), thr>>>(g_layer_bufs->mlp_fc_gelu->data, g_layer_bufs->mlp_proj->data, block->mlp.proj_w->data, B, S, h * 4, h);
+        mlp_backward_weight<<<CEIL_DIV(B * S * h * 4, thr), thr>>>(g_block->mlp.proj_w->data, g_block->mlp.proj_b->data, g_layer_bufs->mlp_proj->data, layer_bufs->mlp_fc_gelu->data, B, S, h * 4, h);
+
+        // Backward through GELU: mlp_fc_gelu = gelu(mlp_fc)
+        gelu_backward<<<CEIL_DIV(B * S * 4 * h, thr), thr>>>(g_layer_bufs->mlp_fc->data, layer_bufs->mlp_fc->data, g_layer_bufs->mlp_fc_gelu->data, B * S * 4 * h);
+
+        // Backward through MLP FC: mlp_fc = ln_2 @ fc_w + fc_b
+        mlp_backward_input<<<CEIL_DIV(B * S * h, thr), thr>>>(g_layer_bufs->ln_2->data, g_layer_bufs->mlp_fc->data, block->mlp.fc_w->data, B, S, h, h * 4);
+        mlp_backward_weight<<<CEIL_DIV(B * S * h * 4, thr), thr>>>(g_block->mlp.fc_w->data, g_block->mlp.fc_b->data, g_layer_bufs->mlp_fc->data, layer_bufs->ln_2->data, B, S, h, h * 4);
+
+        // Backward through LayerNorm 2
+        layernorm_backward<<<B, thr>>>(g_layer_bufs->res_2->data, g_block->ln_2.w->data, g_block->ln_2.b->data, g_layer_bufs->ln_2->data, layer_bufs->res_2->data, block->ln_2.w->data, layer_bufs->ln_2_mean->data, layer_bufs->ln_2_rstd->data, B, S, h);
+
+        // Backward through residual connection 2: res_2 = att_proj + res
+        residual_backward<<<CEIL_DIV(B * S * h, thr), thr>>>(g_res->data, g_layer_bufs->att_proj->data, g_layer_bufs->res_2->data, B * S * h);
+
+        // Backward through attention projection: att_proj = atty @ proj_w + proj_b
+        mlp_backward_input<<<CEIL_DIV(B * S * h, thr), thr>>>(g_layer_bufs->atty->data, g_layer_bufs->att_proj->data, block->attn.proj_w->data, B, S, h, h);
+        mlp_backward_weight<<<CEIL_DIV(B * S * h, thr), thr>>>(g_block->attn.proj_w->data, g_block->attn.proj_b->data, g_layer_bufs->att_proj->data, layer_bufs->atty->data, B, S, h, h);
+
+        // Backward through attention
+        attention_backward<<<CEIL_DIV(B * S * n_head, thr), thr>>>(g_layer_bufs->qkv->data, g_layer_bufs->preatt->data, g_layer_bufs->att->data, g_layer_bufs->atty->data, layer_bufs->qkv->data, layer_bufs->att->data, B, S, h, n_head);
+
+        // Backward through QKV projection: qkv = ln_1 @ qkv_w + qkv_b
+        mlp_backward_input<<<CEIL_DIV(B * S * h, thr), thr>>>(g_layer_bufs->ln_1->data, g_layer_bufs->qkv->data, block->attn.qkv_w->data, B, S, h, h * 3);
+        mlp_backward_weight<<<CEIL_DIV(B * S * h * 3, thr), thr>>>(g_block->attn.qkv_w->data, g_block->attn.qkv_b->data, g_layer_bufs->qkv->data, layer_bufs->ln_1->data, B, S, h, h * 3);
+
+        // Backward through LayerNorm 1
+        layernorm_backward<<<B, thr>>>(g_res->data, g_block->ln_1.w->data, g_block->ln_1.b->data, g_layer_bufs->ln_1->data, res->data, block->ln_1.w->data, layer_bufs->ln_1_mean->data, layer_bufs->ln_1_rstd->data, B, S, h);
+    }
+
+    // Backward through embedding layer
+    embedding_backward<<<CEIL_DIV(B * S, thr), thr>>>(g_model.emb.wte->data, g_model.emb.wpe->data, g_buffers.encoded->data, d_input_tokens, B, S, h);
 }
 
 int extract_greedy_token(int seq_len, tensor_t *logits) {
