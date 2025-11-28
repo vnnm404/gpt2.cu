@@ -204,28 +204,28 @@ void forward(const int *d_input_tokens, int seq_len) {
 
         layernorm_forward<<<1, 256>>>(buffers.buf1->data, buffers.res->data, block->ln_1.w->data, block->ln_1.b->data, NULL, NULL, seq_len, config.n_embd);
 
-        mlp_forward<<<CEIL_DIV(seq_len * 3 * config.n_embd, 256), 256>>>(buffers.buf2->data, buffers.buf1->data, block->attn.qkv_w->data, block->attn.qkv_b->data, 1, seq_len, config.n_embd, config.n_embd * 3);
+        mlp_forward<<<MLP_FORWARD_GRID(config.n_embd * 3, 1, seq_len), MLP_BLOCK_DIM>>>(buffers.buf2->data, buffers.buf1->data, block->attn.qkv_w->data, block->attn.qkv_b->data, 1, seq_len, config.n_embd, config.n_embd * 3);
 
         attention_forward<<<CEIL_DIV(1 * seq_len * config.n_head, 256), 256>>>(buffers.buf1->data, buffers.preatt->data, buffers.att->data, buffers.buf2->data, 1, seq_len, config.n_head, config.n_embd);
 
-        mlp_forward<<<CEIL_DIV(1 * seq_len * config.n_embd, 256), 256>>>(buffers.buf2->data, buffers.buf1->data, block->attn.proj_w->data, block->attn.proj_b->data, 1, seq_len, config.n_embd, config.n_embd);
+        mlp_forward<<<MLP_FORWARD_GRID(config.n_embd, 1, seq_len), MLP_BLOCK_DIM>>>(buffers.buf2->data, buffers.buf1->data, block->attn.proj_w->data, block->attn.proj_b->data, 1, seq_len, config.n_embd, config.n_embd);
 
         residual_forward<<<CEIL_DIV(1 * seq_len * config.n_embd, 256), 256>>>(buffers.res->data, buffers.buf2->data, buffers.res->data, 1, seq_len, config.n_embd);
 
         layernorm_forward<<<1, 256>>>(buffers.buf1->data, buffers.res->data, block->ln_2.w->data, block->ln_2.b->data, NULL, NULL, seq_len, config.n_embd);
 
-        mlp_forward<<<CEIL_DIV(seq_len * 4 * config.n_embd, 256), 256>>>(buffers.buf2->data, buffers.buf1->data, block->mlp.fc_w->data, block->mlp.fc_b->data, 1, seq_len, config.n_embd, config.n_embd * 4);
+        mlp_forward<<<MLP_FORWARD_GRID(config.n_embd * 4, 1, seq_len), MLP_BLOCK_DIM>>>(buffers.buf2->data, buffers.buf1->data, block->mlp.fc_w->data, block->mlp.fc_b->data, 1, seq_len, config.n_embd, config.n_embd * 4);
 
         gelu_forward<<<CEIL_DIV(1 * seq_len * config.n_embd * 4, 256), 256>>>(buffers.buf1->data, buffers.buf2->data, 1, seq_len, config.n_embd * 4);
 
-        mlp_forward<<<CEIL_DIV(1 * seq_len * config.n_embd, 256), 256>>>(buffers.buf2->data, buffers.buf1->data, block->mlp.proj_w->data, block->mlp.proj_b->data, 1, seq_len, config.n_embd * 4, config.n_embd);
+        mlp_forward<<<MLP_FORWARD_GRID(config.n_embd, 1, seq_len), MLP_BLOCK_DIM>>>(buffers.buf2->data, buffers.buf1->data, block->mlp.proj_w->data, block->mlp.proj_b->data, 1, seq_len, config.n_embd * 4, config.n_embd);
 
         residual_forward<<<CEIL_DIV(1 * seq_len * config.n_embd, 256), 256>>>(buffers.res->data, buffers.buf2->data, buffers.res->data, 1, seq_len, config.n_embd);
     }
 
     layernorm_forward<<<1, 256>>>(buffers.res->data, buffers.res->data, model.ln_f.w->data, model.ln_f.b->data, NULL, NULL, seq_len, config.n_embd);
 
-    mlp_forward<<<CEIL_DIV(1 * seq_len * config.vocab_size, 256), 256>>>(buffers.logits->data, buffers.res->data, model.emb.wte->data, NULL, 1, seq_len, config.n_embd, config.vocab_size);
+    mlp_forward<<<MLP_FORWARD_GRID(config.vocab_size, 1, seq_len), MLP_BLOCK_DIM>>>(buffers.logits->data, buffers.res->data, model.emb.wte->data, NULL, 1, seq_len, config.n_embd, config.vocab_size);
 
     // print first 4 
 }

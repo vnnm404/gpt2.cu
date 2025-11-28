@@ -1,36 +1,99 @@
-/* Softmax layer implementation - C implementation */
+/* Softmax layer implementation - Optimized CUDA implementation */
 
 #include "gpt2/layers/softmax.h"
 
+// Warp-level reduction for max
+__device__ float warpReduceMax(float val) {
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, offset));
+    }
+    return val;
+}
+
+// Warp-level reduction for sum
+__device__ float warpReduceSum(float val) {
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        val += __shfl_xor_sync(0xffffffff, val, offset);
+    }
+    return val;
+}
+
 // out: [batch_size, seq_len, dim]
 // input: [batch_size, seq_len, dim]
+// Each block handles one (batch, seq_len) position
+// Threads cooperate to compute softmax over dim
 __global__ void softmax_forward(float *out, const float *input, int batch_size, int seq_len, int dim) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total_elements = batch_size * seq_len * dim;
+    // Each block processes one (batch, time) position
+    int bt = blockIdx.x;
+    if (bt >= batch_size * seq_len) return;
 
-    if (idx < total_elements) {
-        int d = idx % dim;
-        int t = (idx / dim) % seq_len;
-        int batch_idx = idx / (seq_len * dim);
+    const float *inp_bt = input + bt * dim;
+    float *out_bt = out + bt * dim;
 
-        // Pointer to input vector for this (batch, time) position
-        const float *inp_bt = input + batch_idx * seq_len * dim + t * dim;
+    // Shared memory for block-level reductions
+    __shared__ float shared_max[32];  // One per warp
+    __shared__ float shared_sum[32];
 
-        // Compute max for numerical stability
-        float max_val = inp_bt[0];
-        for (int i = 1; i < dim; i++) {
-            if (inp_bt[i] > max_val) {
-                max_val = inp_bt[i];
-            }
+    int tid = threadIdx.x;
+    int warpId = tid / 32;
+    int laneId = tid % 32;
+
+    // Phase 1: Find maximum value for numerical stability
+    float thread_max = -INFINITY;
+    for (int i = tid; i < dim; i += blockDim.x) {
+        thread_max = fmaxf(thread_max, inp_bt[i]);
+    }
+
+    // Warp-level reduction
+    float warp_max = warpReduceMax(thread_max);
+
+    // First thread in each warp writes to shared memory
+    if (laneId == 0) {
+        shared_max[warpId] = warp_max;
+    }
+    __syncthreads();
+
+    // Final reduction across warps (first warp only)
+    if (warpId == 0) {
+        float val = (laneId < (blockDim.x + 31) / 32) ? shared_max[laneId] : -INFINITY;
+        val = warpReduceMax(val);
+        if (laneId == 0) {
+            shared_max[0] = val;
         }
+    }
+    __syncthreads();
 
-        // Compute sum of exp
-        float sum_exp = 0.0f;
-        for (int i = 0; i < dim; i++) {
-            sum_exp += expf(inp_bt[i] - max_val);
+    float max_val = shared_max[0];
+
+    // Phase 2: Compute sum of exponentials
+    float thread_sum = 0.0f;
+    for (int i = tid; i < dim; i += blockDim.x) {
+        thread_sum += expf(inp_bt[i] - max_val);
+    }
+
+    // Warp-level reduction
+    float warp_sum = warpReduceSum(thread_sum);
+
+    // First thread in each warp writes to shared memory
+    if (laneId == 0) {
+        shared_sum[warpId] = warp_sum;
+    }
+    __syncthreads();
+
+    // Final reduction across warps (first warp only)
+    if (warpId == 0) {
+        float val = (laneId < (blockDim.x + 31) / 32) ? shared_sum[laneId] : 0.0f;
+        val = warpReduceSum(val);
+        if (laneId == 0) {
+            shared_sum[0] = val;
         }
+    }
+    __syncthreads();
 
-        // Compute softmax output
-        out[idx] = expf(inp_bt[d] - max_val) / sum_exp;
+    float sum_exp = shared_sum[0];
+
+    // Phase 3: Compute and write softmax output
+    for (int i = tid; i < dim; i += blockDim.x) {
+        out_bt[i] = expf(inp_bt[i] - max_val) / sum_exp;
     }
 }

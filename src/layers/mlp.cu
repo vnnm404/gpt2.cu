@@ -1,105 +1,186 @@
-/* MLP layer implementation - C implementation */
+/* MLP layer implementation - Optimized CUDA implementation */
 
 #include "gpt2/layers/mlp.h"
 
+#define TILE_SIZE 32
+
+// Optimized forward pass using shared memory tiling
 // out: [batch_size, seq_len, output_dim]
 // input: [batch_size, seq_len, input_dim]
 // w: [input_dim, output_dim]
 // b: [output_dim]
-// Launch with: mlp_forward<<<num_blocks, threads_per_block>>>(...)
-// where num_blocks = (batch_size * seq_len * output_dim + threads_per_block - 1) / threads_per_block
-// and threads_per_block = 256 (or similar)
+// Launch with: dim3 grid((output_dim + TILE_SIZE - 1) / TILE_SIZE, (batch_size * seq_len + TILE_SIZE - 1) / TILE_SIZE);
+//              dim3 block(TILE_SIZE, TILE_SIZE);
 __global__ void mlp_forward(float *out, const float *input, const float *w, const float *b, int batch_size, int seq_len, int input_dim, int output_dim) {
-    // Global thread index across all blocks
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    // Shared memory for tiling
+    __shared__ float s_input[TILE_SIZE][TILE_SIZE];
+    __shared__ float s_weight[TILE_SIZE][TILE_SIZE];
     
-    int total_elements = batch_size * seq_len * output_dim;
+    // Thread indices within block
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
     
-    if (idx < total_elements) {
-        // Decompose linear index into (batch, time, output_channel)
-        int o = idx % output_dim;
-        int t = (idx / output_dim) % seq_len;
-        int batch_idx = idx / (seq_len * output_dim);
-        
-        // Pointer to input vector for this (batch, time) position
-        const float *inp_bt = input + batch_idx * seq_len * input_dim + t * input_dim;
-        
-        // Compute dot product: input[:] @ w[:, o]
-        // weights are stored as [input_dim, output_dim], so column o is at w[i * output_dim + o]
-        float val = (b == NULL) ? 0.0f : b[o];
-        for (int i = 0; i < input_dim; i++) {
-            val += inp_bt[i] * w[i * output_dim + o];
+    // Global output position
+    int out_col = blockIdx.x * TILE_SIZE + tx;  // output dimension
+    int out_row = blockIdx.y * TILE_SIZE + ty;  // batch * seq_len
+    
+    // Compute output element with tiling over input_dim
+    float acc = 0.0f;
+    
+    int num_tiles = (input_dim + TILE_SIZE - 1) / TILE_SIZE;
+    
+    for (int tile = 0; tile < num_tiles; tile++) {
+        // Load tile of input
+        int input_col = tile * TILE_SIZE + tx;
+        if (out_row < batch_size * seq_len && input_col < input_dim) {
+            s_input[ty][tx] = input[out_row * input_dim + input_col];
+        } else {
+            s_input[ty][tx] = 0.0f;
         }
         
-        // Write output
-        out[idx] = val;
+        // Load tile of weight
+        int weight_row = tile * TILE_SIZE + ty;
+        if (weight_row < input_dim && out_col < output_dim) {
+            s_weight[ty][tx] = w[weight_row * output_dim + out_col];
+        } else {
+            s_weight[ty][tx] = 0.0f;
+        }
+        
+        __syncthreads();
+        
+        // Compute partial dot product
+        #pragma unroll
+        for (int k = 0; k < TILE_SIZE; k++) {
+            acc += s_input[ty][k] * s_weight[k][tx];
+        }
+        
+        __syncthreads();
+    }
+    
+    // Write output with bias
+    if (out_row < batch_size * seq_len && out_col < output_dim) {
+        float bias_val = (b == NULL) ? 0.0f : b[out_col];
+        out[out_row * output_dim + out_col] = acc + bias_val;
     }
 }
 
-// Backward pass into input
+// Optimized backward pass into input using shared memory tiling
 // g_input: [batch_size, seq_len, input_dim] - gradient w.r.t. input
 // g_out: [batch_size, seq_len, output_dim] - gradient w.r.t. output
 // weight: [input_dim, output_dim] - forward pass weights
-// Launch with: mlp_backward_input<<<num_blocks, threads_per_block>>>(...)
-// where num_blocks = (batch_size * seq_len + threads_per_block - 1) / threads_per_block
-// Parallelized over batch_size * seq_len
+// Computes: g_input = g_out @ weight^T
+// Launch with: dim3 grid((input_dim + TILE_SIZE - 1) / TILE_SIZE, (batch_size * seq_len + TILE_SIZE - 1) / TILE_SIZE);
+//              dim3 block(TILE_SIZE, TILE_SIZE);
 __global__ void mlp_backward_input(float *g_input, const float *g_out, const float *weight, int batch_size, int seq_len, int input_dim, int output_dim) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total_elements = batch_size * seq_len;
+    __shared__ float s_g_out[TILE_SIZE][TILE_SIZE];
+    __shared__ float s_weight[TILE_SIZE][TILE_SIZE];
     
-    if (idx < total_elements) {
-        // Decompose linear index into (batch, time)
-        int t = idx % seq_len;
-        int batch_idx = idx / seq_len;
-        
-        // Pointers to gradients for this (batch, time) position
-        const float *g_out_bt = g_out + batch_idx * seq_len * output_dim + t * output_dim;
-        float *g_input_bt = g_input + batch_idx * seq_len * input_dim + t * input_dim;
-        
-        // Compute gradient: g_input = g_out @ weight^T
-        // For each input dimension i, accumulate contributions from all output dimensions
-        for (int o = 0; o < output_dim; o++) {
-            float g_o = g_out_bt[o];
-            // weight row o is at weight[i * output_dim + o] for each i
-            for (int i = 0; i < input_dim; i++) {
-                g_input_bt[i] += weight[i * output_dim + o] * g_o;
-            }
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+    
+    int in_col = blockIdx.x * TILE_SIZE + tx;   // input_dim
+    int in_row = blockIdx.y * TILE_SIZE + ty;   // batch * seq_len
+    
+    float acc = 0.0f;
+    
+    int num_tiles = (output_dim + TILE_SIZE - 1) / TILE_SIZE;
+    
+    for (int tile = 0; tile < num_tiles; tile++) {
+        // Load tile of g_out
+        int g_out_col = tile * TILE_SIZE + tx;
+        if (in_row < batch_size * seq_len && g_out_col < output_dim) {
+            s_g_out[ty][tx] = g_out[in_row * output_dim + g_out_col];
+        } else {
+            s_g_out[ty][tx] = 0.0f;
         }
+        
+        // Load tile of weight^T (transpose weight during load)
+        int weight_col = tile * TILE_SIZE + ty;  // output_dim in original weight
+        if (in_col < input_dim && weight_col < output_dim) {
+            s_weight[ty][tx] = weight[in_col * output_dim + weight_col];
+        } else {
+            s_weight[ty][tx] = 0.0f;
+        }
+        
+        __syncthreads();
+        
+        // Compute partial dot product
+        #pragma unroll
+        for (int k = 0; k < TILE_SIZE; k++) {
+            acc += s_g_out[ty][k] * s_weight[k][tx];
+        }
+        
+        __syncthreads();
+    }
+    
+    // Write output (accumulate into g_input)
+    if (in_row < batch_size * seq_len && in_col < input_dim) {
+        atomicAdd(&g_input[in_row * input_dim + in_col], acc);
     }
 }
 
-// Backward pass into weight and bias
+// Optimized backward pass into weight and bias using shared memory tiling
 // g_weight: [input_dim, output_dim] - gradient w.r.t. weight
 // g_bias: [output_dim] - gradient w.r.t. bias
 // g_out: [batch_size, seq_len, output_dim] - gradient w.r.t. output
 // input: [batch_size, seq_len, input_dim] - forward pass input
-// Launch with: mlp_backward_weight<<<num_blocks, threads_per_block>>>(...)
-// where num_blocks = (output_dim + threads_per_block - 1) / threads_per_block
-// Parallelized over output_dim
+// Computes: g_weight = input^T @ g_out
+// Launch with: dim3 grid((output_dim + TILE_SIZE - 1) / TILE_SIZE, (input_dim + TILE_SIZE - 1) / TILE_SIZE);
+//              dim3 block(TILE_SIZE, TILE_SIZE);
 __global__ void mlp_backward_weight(float *g_weight, float *g_bias, const float *g_out, const float *input, int batch_size, int seq_len, int input_dim, int output_dim) {
-    int o = blockIdx.x * blockDim.x + threadIdx.x;
+    __shared__ float s_input[TILE_SIZE][TILE_SIZE];
+    __shared__ float s_g_out[TILE_SIZE][TILE_SIZE];
     
-    if (o < output_dim) {
-        // Accumulate gradients over all (batch, time) positions
-        for (int b = 0; b < batch_size; b++) {
-            for (int t = 0; t < seq_len; t++) {
-                // Pointers for this (batch, time) position
-                const float *g_out_bt = g_out + b * seq_len * output_dim + t * output_dim;
-                const float *input_bt = input + b * seq_len * input_dim + t * input_dim;
-                
-                float g_o = g_out_bt[o];
-                
-                // Accumulate bias gradient
-                if (g_bias != NULL) {
-                    g_bias[o] += g_o;
-                }
-                
-                // Accumulate weight gradient
-                // g_weight[:, o] += input_bt[:] * g_o
-                for (int i = 0; i < input_dim; i++) {
-                    g_weight[i * output_dim + o] += input_bt[i] * g_o;
-                }
-            }
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+    
+    int out_col = blockIdx.x * TILE_SIZE + tx;  // output_dim
+    int out_row = blockIdx.y * TILE_SIZE + ty;  // input_dim
+    
+    float acc = 0.0f;
+    
+    int batch_seq = batch_size * seq_len;
+    int num_tiles = (batch_seq + TILE_SIZE - 1) / TILE_SIZE;
+    
+    for (int tile = 0; tile < num_tiles; tile++) {
+        // Load tile of input^T (transpose during load)
+        int batch_seq_idx = tile * TILE_SIZE + tx;
+        if (out_row < input_dim && batch_seq_idx < batch_seq) {
+            s_input[ty][tx] = input[batch_seq_idx * input_dim + out_row];
+        } else {
+            s_input[ty][tx] = 0.0f;
         }
+        
+        // Load tile of g_out
+        batch_seq_idx = tile * TILE_SIZE + ty;
+        if (batch_seq_idx < batch_seq && out_col < output_dim) {
+            s_g_out[ty][tx] = g_out[batch_seq_idx * output_dim + out_col];
+        } else {
+            s_g_out[ty][tx] = 0.0f;
+        }
+        
+        __syncthreads();
+        
+        // Compute partial dot product
+        #pragma unroll
+        for (int k = 0; k < TILE_SIZE; k++) {
+            acc += s_input[ty][k] * s_g_out[k][tx];
+        }
+        
+        __syncthreads();
+    }
+    
+    // Write weight gradient (accumulate)
+    if (out_row < input_dim && out_col < output_dim) {
+        atomicAdd(&g_weight[out_row * output_dim + out_col], acc);
+    }
+    
+    // Compute bias gradient - use first row of threads
+    if (ty == 0 && out_col < output_dim && g_bias != NULL) {
+        float bias_grad = 0.0f;
+        for (int bs = 0; bs < batch_seq; bs++) {
+            bias_grad += g_out[bs * output_dim + out_col];
+        }
+        atomicAdd(&g_bias[out_col], bias_grad);
     }
 }
