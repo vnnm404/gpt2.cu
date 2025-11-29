@@ -70,9 +70,9 @@ int main() {
     printf("Model loaded successfully.\n");
 
     // sample tokens: "The capital of France is"
-    // int input_tokens[] = {464, 3139, 286, 4881, 318, 262, 3139, 286};  
-    int input_tokens[] = {14350, 1747, 1244, 1011, 674};  // "Robots might take our"
-    int seq_len = 5;
+    int input_tokens[] = {464, 3139, 286, 4881, 318, 262, 3139, 286};  
+    // int input_tokens[] = {14350, 1747, 1244, 1011, 674};  // "Robots might take our"
+    int seq_len = 8;
     
     int *d_input_tokens;
     if (prepare_input_tokens(input_tokens, seq_len, &d_input_tokens) != 0) {

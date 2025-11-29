@@ -98,6 +98,7 @@ adamw_state_t opt_state;
 // megakernel, gpu memory
 typedef struct {
     int op;
+    int prev_op;
     int layer;
     int b_x, b_y;
 
@@ -123,6 +124,27 @@ void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt);
 void gpt2_zero_grad(gpt2_t *grads);
 void zero_activation_grads(train_buffers_t *g_buffers);
 int extract_greedy_token(int seq_len, tensor_t *logits);
+void schedule_instructions(int seq_len);
+void free_schedule();
+
+__global__ void megakernel_execute(
+    config_t config,
+
+    gpt2_t model,
+    gpt2_t g_model,
+
+    train_buffers_t buffers,
+    train_buffers_t g_buffers,
+
+    adamw_state_t opt_state,
+
+    int seq_len,
+    const int *d_input_tokens,
+    const int *d_target_tokens,
+
+    int *bar,
+    stream_t **streams
+);
 
 int main()
 {
@@ -182,37 +204,43 @@ int main()
     setup_train_buffers(&g_buffers, seq_len);
     seq_len -= 1; // because target is shifted by 1
 
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    cudaEventRecord(start);
+    schedule_instructions(seq_len);
 
-    gpt2_zero_grad(&g_model);
-    zero_activation_grads(&g_buffers);
-    forward(d_input_tokens, seq_len);
-    cross_entropy(d_target_tokens, seq_len);
-    backward(d_input_tokens, d_target_tokens, seq_len);
+    // TODO: megakernel stuff
 
-    gpt2_update(&model, &g_model, &opt_state);
+    free_schedule();
 
-    gpt2_zero_grad(&g_model);
-    zero_activation_grads(&g_buffers);
-    forward(d_input_tokens, seq_len);
-    cross_entropy(d_target_tokens, seq_len);
-    backward(d_input_tokens, d_target_tokens, seq_len);
+    // cudaEvent_t start, stop;
+    // cudaEventCreate(&start);
+    // cudaEventCreate(&stop);
+    // cudaEventRecord(start);
 
-    gpt2_update(&model, &g_model, &opt_state);
+    // gpt2_zero_grad(&g_model);
+    // zero_activation_grads(&g_buffers);
+    // forward(d_input_tokens, seq_len);
+    // cross_entropy(d_target_tokens, seq_len);
+    // backward(d_input_tokens, d_target_tokens, seq_len);
 
-    gpuErrchk(cudaDeviceSynchronize());
+    // gpt2_update(&model, &g_model, &opt_state);
 
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    float milliseconds = 0;
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("fwd pass time: %.3f ms\n", milliseconds);
+    // gpt2_zero_grad(&g_model);
+    // zero_activation_grads(&g_buffers);
+    // forward(d_input_tokens, seq_len);
+    // cross_entropy(d_target_tokens, seq_len);
+    // backward(d_input_tokens, d_target_tokens, seq_len);
 
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
+    // gpt2_update(&model, &g_model, &opt_state);
+
+    // gpuErrchk(cudaDeviceSynchronize());
+
+    // cudaEventRecord(stop);
+    // cudaEventSynchronize(stop);
+    // float milliseconds = 0;
+    // cudaEventElapsedTime(&milliseconds, start, stop);
+    // printf("fwd pass time: %.3f ms\n", milliseconds);
+
+    // cudaEventDestroy(start);
+    // cudaEventDestroy(stop);
 
     // Extract predicted token (greedy)
     int predicted_token = extract_greedy_token(seq_len, &buffers.logits);
@@ -651,4 +679,874 @@ int extract_greedy_token(int seq_len, tensor_t *logits) {
     free(h_logits);
 
     return max_token;
+}
+
+void schedule_instructions(int seq_len) {
+    int L = config.n_layer;
+    int B = config.batch_size;
+    int S = seq_len;
+    int h = config.n_embd;
+    int n_head = config.n_head;
+    int V = config.vocab_size;
+    int thr = 256;
+
+    // Initialize streams for each SM
+    for (int sm = 0; sm < NUM_SM; sm++) {
+        streams[sm] = (stream_t *)malloc(sizeof(stream_t));
+        streams[sm]->n = 0;
+        streams[sm]->instructions = NULL;
+    }
+
+    // Temporary storage for all instructions before distributing to SMs
+    int max_instructions = 400000; // Conservative estimate
+    instruction_t *all_instructions = (instruction_t *)malloc(max_instructions * sizeof(instruction_t));
+    int instruction_count = 0;
+
+    int prev_op = 0;
+
+    // OP 1: Embedding forward - [B blocks, 1D grid]
+    {
+        int op = 1;
+        int layer = -1;
+        int bar_idx = -1;
+        int expected = 0;
+        int num_blocks = B;
+
+        for (int block = 0; block < num_blocks; block++) {
+            all_instructions[instruction_count++] = (instruction_t){
+                .op = op,
+                .prev_op = prev_op,
+                .layer = layer,
+                .b_x = block,
+                .b_y = -1,
+                .bar_idx = bar_idx,
+                .expected = expected
+            };
+        }
+        prev_op = op;
+    }
+
+    // Forward pass through layers
+    for (int layer_idx = 0; layer_idx < L; layer_idx++) {
+        // OP 2: LayerNorm 1 - [B blocks, 1D grid]
+        {
+            int op = 2;
+            int bar_idx = (layer_idx == 0) ? 0 : (1 + (layer_idx - 1) * 10 + 9);
+            int expected = (layer_idx == 0) ? B : CEIL_DIV(B * S * h, thr);
+            int num_blocks = B;
+
+            for (int block = 0; block < num_blocks; block++) {
+                all_instructions[instruction_count++] = (instruction_t){
+                    .op = op,
+                    .prev_op = prev_op,
+                    .layer = layer_idx,
+                    .b_x = block,
+                    .b_y = -1,
+                    .bar_idx = bar_idx,
+                    .expected = expected
+                };
+            }
+            prev_op = op;
+        }
+
+        // OP 3: QKV - [MLP_FORWARD_GRID(h * 3, B, S) blocks, 2D grid]
+        {
+            int op = 3;
+            int bar_idx = 1 + layer_idx * 10;
+            int expected = B;
+            dim3 grid = MLP_FORWARD_GRID(h * 3, B, S);
+            int num_blocks_x = grid.x;
+            int num_blocks_y = grid.y;
+
+            for (int by = 0; by < num_blocks_y; by++) {
+                for (int bx = 0; bx < num_blocks_x; bx++) {
+                    all_instructions[instruction_count++] = (instruction_t){
+                        .op = op,
+                        .prev_op = prev_op,
+                        .layer = layer_idx,
+                        .b_x = bx,
+                        .b_y = by,
+                        .bar_idx = bar_idx,
+                        .expected = expected
+                    };
+                }
+            }
+            prev_op = op;
+        }
+
+        // OP 4: Attention - [CEIL_DIV(B * S * n_head, thr) blocks, 1D grid]
+        {
+            int op = 4;
+            int bar_idx = 1 + layer_idx * 10 + 1;
+            dim3 grid = MLP_FORWARD_GRID(h * 3, B, S);
+            int expected = grid.x * grid.y;
+            int num_blocks = CEIL_DIV(B * S * n_head, thr);
+
+            for (int block = 0; block < num_blocks; block++) {
+                all_instructions[instruction_count++] = (instruction_t){
+                    .op = op,
+                    .prev_op = prev_op,
+                    .layer = layer_idx,
+                    .b_x = block,
+                    .b_y = -1,
+                    .bar_idx = bar_idx,
+                    .expected = expected
+                };
+            }
+            prev_op = op;
+        }
+
+        // OP 5: Attention projection - [MLP_FORWARD_GRID(h, B, S) blocks, 2D grid]
+        {
+            int op = 5;
+            int bar_idx = 1 + layer_idx * 10 + 2;
+            int expected = CEIL_DIV(B * S * n_head, thr);
+            dim3 grid = MLP_FORWARD_GRID(h, B, S);
+            int num_blocks_x = grid.x;
+            int num_blocks_y = grid.y;
+
+            for (int by = 0; by < num_blocks_y; by++) {
+                for (int bx = 0; bx < num_blocks_x; bx++) {
+                    all_instructions[instruction_count++] = (instruction_t){
+                        .op = op,
+                        .prev_op = prev_op,
+                        .layer = layer_idx,
+                        .b_x = bx,
+                        .b_y = by,
+                        .bar_idx = bar_idx,
+                        .expected = expected
+                    };
+                }
+            }
+            prev_op = op;
+        }
+
+        // OP 6: Residual 2 - [CEIL_DIV(B * S * h, thr) blocks, 1D grid]
+        {
+            int op = 6;
+            int bar_idx = 1 + layer_idx * 10 + 3;
+            dim3 grid = MLP_FORWARD_GRID(h, B, S);
+            int expected = grid.x * grid.y;
+            int num_blocks = CEIL_DIV(B * S * h, thr);
+
+            for (int block = 0; block < num_blocks; block++) {
+                all_instructions[instruction_count++] = (instruction_t){
+                    .op = op,
+                    .prev_op = prev_op,
+                    .layer = layer_idx,
+                    .b_x = block,
+                    .b_y = -1,
+                    .bar_idx = bar_idx,
+                    .expected = expected
+                };
+            }
+            prev_op = op;
+        }
+
+        // OP 7: LayerNorm 2 - [B blocks, 1D grid]
+        {
+            int op = 7;
+            int bar_idx = 1 + layer_idx * 10 + 4;
+            int expected = CEIL_DIV(B * S * h, thr);
+            int num_blocks = B;
+
+            for (int block = 0; block < num_blocks; block++) {
+                all_instructions[instruction_count++] = (instruction_t){
+                    .op = op,
+                    .prev_op = prev_op,
+                    .layer = layer_idx,
+                    .b_x = block,
+                    .b_y = -1,
+                    .bar_idx = bar_idx,
+                    .expected = expected
+                };
+            }
+            prev_op = op;
+        }
+
+        // OP 8: MLP FC - [MLP_FORWARD_GRID(h * 4, B, S) blocks, 2D grid]
+        {
+            int op = 8;
+            int bar_idx = 1 + layer_idx * 10 + 5;
+            int expected = B;
+            dim3 grid = MLP_FORWARD_GRID(h * 4, B, S);
+            int num_blocks_x = grid.x;
+            int num_blocks_y = grid.y;
+
+            for (int by = 0; by < num_blocks_y; by++) {
+                for (int bx = 0; bx < num_blocks_x; bx++) {
+                    all_instructions[instruction_count++] = (instruction_t){
+                        .op = op,
+                        .prev_op = prev_op,
+                        .layer = layer_idx,
+                        .b_x = bx,
+                        .b_y = by,
+                        .bar_idx = bar_idx,
+                        .expected = expected
+                    };
+                }
+            }
+            prev_op = op;
+        }
+
+        // OP 9: GELU - [CEIL_DIV(B * S * 4 * h, thr) blocks, 1D grid]
+        {
+            int op = 9;
+            int bar_idx = 1 + layer_idx * 10 + 6;
+            dim3 grid = MLP_FORWARD_GRID(h * 4, B, S);
+            int expected = grid.x * grid.y;
+            int num_blocks = CEIL_DIV(B * S * 4 * h, thr);
+
+            for (int block = 0; block < num_blocks; block++) {
+                all_instructions[instruction_count++] = (instruction_t){
+                    .op = op,
+                    .prev_op = prev_op,
+                    .layer = layer_idx,
+                    .b_x = block,
+                    .b_y = -1,
+                    .bar_idx = bar_idx,
+                    .expected = expected
+                };
+            }
+            prev_op = op;
+        }
+
+        // OP 10: MLP projection - [MLP_FORWARD_GRID(h, B, S) blocks, 2D grid]
+        {
+            int op = 10;
+            int bar_idx = 1 + layer_idx * 10 + 7;
+            int expected = CEIL_DIV(B * S * 4 * h, thr);
+            dim3 grid = MLP_FORWARD_GRID(h, B, S);
+            int num_blocks_x = grid.x;
+            int num_blocks_y = grid.y;
+
+            for (int by = 0; by < num_blocks_y; by++) {
+                for (int bx = 0; bx < num_blocks_x; bx++) {
+                    all_instructions[instruction_count++] = (instruction_t){
+                        .op = op,
+                        .prev_op = prev_op,
+                        .layer = layer_idx,
+                        .b_x = bx,
+                        .b_y = by,
+                        .bar_idx = bar_idx,
+                        .expected = expected
+                    };
+                }
+            }
+            prev_op = op;
+        }
+
+        // OP 11: Residual 3 - [CEIL_DIV(B * S * h, thr) blocks, 1D grid]
+        {
+            int op = 11;
+            int bar_idx = 1 + layer_idx * 10 + 8;
+            dim3 grid = MLP_FORWARD_GRID(h, B, S);
+            int expected = grid.x * grid.y;
+            int num_blocks = CEIL_DIV(B * S * h, thr);
+
+            for (int block = 0; block < num_blocks; block++) {
+                all_instructions[instruction_count++] = (instruction_t){
+                    .op = op,
+                    .prev_op = prev_op,
+                    .layer = layer_idx,
+                    .b_x = block,
+                    .b_y = -1,
+                    .bar_idx = bar_idx,
+                    .expected = expected
+                };
+            }
+            prev_op = op;
+        }
+    }
+
+    // OP 12: Final LayerNorm - [B blocks, 1D grid]
+    {
+        int op = 12;
+        int bar_idx = 1 + (L - 1) * 10 + 9;
+        int expected = CEIL_DIV(B * S * h, thr);
+        int num_blocks = B;
+
+        for (int block = 0; block < num_blocks; block++) {
+            all_instructions[instruction_count++] = (instruction_t){
+                .op = op,
+                .prev_op = prev_op,
+                .layer = -1,
+                .b_x = block,
+                .b_y = -1,
+                .bar_idx = bar_idx,
+                .expected = expected
+            };
+        }
+        prev_op = op;
+    }
+
+    // OP 13: Logits - [MLP_FORWARD_GRID(V, B, S) blocks, 2D grid]
+    {
+        int op = 13;
+        int bar_idx = 1 + (L * 10) + 0;
+        int expected = B;
+        dim3 grid = MLP_FORWARD_GRID(V, B, S);
+        int num_blocks_x = grid.x;
+        int num_blocks_y = grid.y;
+
+        for (int by = 0; by < num_blocks_y; by++) {
+            for (int bx = 0; bx < num_blocks_x; bx++) {
+                all_instructions[instruction_count++] = (instruction_t){
+                    .op = op,
+                    .prev_op = prev_op,
+                    .layer = -1,
+                    .b_x = bx,
+                    .b_y = by,
+                    .bar_idx = bar_idx,
+                    .expected = expected
+                };
+            }
+        }
+        prev_op = op;
+    }
+
+    // OP 14: Softmax - [CEIL_DIV(B * S * V, thr) blocks, 1D grid]
+    {
+        int op = 14;
+        int bar_idx = 1 + (L * 10) + 1;
+        dim3 grid = MLP_FORWARD_GRID(V, B, S);
+        int expected = grid.x * grid.y;
+        int num_blocks = CEIL_DIV(B * S * V, thr);
+
+        for (int block = 0; block < num_blocks; block++) {
+            all_instructions[instruction_count++] = (instruction_t){
+                .op = op,
+                .prev_op = prev_op,
+                .layer = -1,
+                .b_x = block,
+                .b_y = -1,
+                .bar_idx = bar_idx,
+                .expected = expected
+            };
+        }
+        prev_op = op;
+    }
+
+    // OP 15: Cross-entropy - [CEIL_DIV(B * S, thr) blocks, 1D grid]
+    {
+        int op = 15;
+        int bar_idx = 1 + (L * 10) + 2;
+        int expected = CEIL_DIV(B * S * V, thr);
+        int num_blocks = CEIL_DIV(B * S, thr);
+
+        for (int block = 0; block < num_blocks; block++) {
+            all_instructions[instruction_count++] = (instruction_t){
+                .op = op,
+                .prev_op = prev_op,
+                .layer = -1,
+                .b_x = block,
+                .b_y = -1,
+                .bar_idx = bar_idx,
+                .expected = expected
+            };
+        }
+        prev_op = op;
+    }
+
+    printf("Forward pass instructions scheduled: %d\n", instruction_count);
+
+    // OP 16: Cross-entropy backward - [CEIL_DIV(B * S, thr) blocks, 1D grid]
+    {
+        int op = 16;
+        int bar_idx = 1 + (L * 10) + 3;
+        int expected = CEIL_DIV(B * S, thr);
+        int num_blocks = CEIL_DIV(B * S, thr);
+
+        for (int block = 0; block < num_blocks; block++) {
+            all_instructions[instruction_count++] = (instruction_t){
+                .op = op,
+                .prev_op = prev_op,
+                .layer = -1,
+                .b_x = block,
+                .b_y = -1,
+                .bar_idx = bar_idx,
+                .expected = expected
+            };
+        }
+        prev_op = op;
+    }
+
+    // OP 17: Logits backward - [MLP_BACKWARD_INPUT_GRID(h, B, S) blocks, 2D grid]
+    {
+        int op = 17;
+        int bar_idx = 1 + (L * 10) + 3 + 1;
+        int expected = CEIL_DIV(B * S * V, thr);
+        dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
+        int num_blocks_x = grid.x;
+        int num_blocks_y = grid.y;
+
+        for (int by = 0; by < num_blocks_y; by++) {
+            for (int bx = 0; bx < num_blocks_x; bx++) {
+                all_instructions[instruction_count++] = (instruction_t){
+                    .op = op,
+                    .prev_op = prev_op,
+                    .layer = -1,
+                    .b_x = bx,
+                    .b_y = by,
+                    .bar_idx = bar_idx,
+                    .expected = expected
+                };
+            }
+        }
+        prev_op = op;
+    }
+
+    // OP 18: Embedding weight gradient - [MLP_BACKWARD_WEIGHT_GRID(V, h) blocks, 2D grid]
+    {
+        int op = 18;
+        int bar_idx = 1 + (L * 10) + 3 + 2;
+        dim3 grid_prev = MLP_BACKWARD_INPUT_GRID(h, B, S);
+        int expected = grid_prev.x * grid_prev.y;
+        dim3 grid = MLP_BACKWARD_WEIGHT_GRID(V, h);
+        int num_blocks_x = grid.x;
+        int num_blocks_y = grid.y;
+
+        for (int by = 0; by < num_blocks_y; by++) {
+            for (int bx = 0; bx < num_blocks_x; bx++) {
+                all_instructions[instruction_count++] = (instruction_t){
+                    .op = op,
+                    .prev_op = prev_op,
+                    .layer = -1,
+                    .b_x = bx,
+                    .b_y = by,
+                    .bar_idx = bar_idx,
+                    .expected = expected
+                };
+            }
+        }
+        prev_op = op;
+    }
+
+    // OP 19: Final LayerNorm backward - [B blocks, 1D grid]
+    {
+        int op = 19;
+        int bar_idx = 1 + (L * 10) + 3 + 3;
+        dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(V, h);
+        int expected = grid_prev.x * grid_prev.y;
+        int num_blocks = B;
+
+        for (int block = 0; block < num_blocks; block++) {
+            all_instructions[instruction_count++] = (instruction_t){
+                .op = op,
+                .prev_op = prev_op,
+                .layer = -1,
+                .b_x = block,
+                .b_y = -1,
+                .bar_idx = bar_idx,
+                .expected = expected
+            };
+        }
+        prev_op = op;
+    }
+
+    // Backward pass through layers
+    for (int layer_idx = L - 1; layer_idx >= 0; layer_idx--) {
+        // OP 20: Residual backward (res_3) - [CEIL_DIV(B * S * h, thr) blocks, 1D grid]
+        {
+            int op = 20;
+            int bar_idx = (layer_idx == L - 1) ? (1 + (L * 10) + 3 + 4) : (1 + (L * 10) + 3 + 5 + (layer_idx + 1) * 14 + 13);
+            int expected = B;
+            int num_blocks = CEIL_DIV(B * S * h, thr);
+
+            for (int block = 0; block < num_blocks; block++) {
+                all_instructions[instruction_count++] = (instruction_t){
+                    .op = op,
+                    .prev_op = prev_op,
+                    .layer = layer_idx,
+                    .b_x = block,
+                    .b_y = -1,
+                    .bar_idx = bar_idx,
+                    .expected = expected
+                };
+            }
+            prev_op = op;
+        }
+
+        // OP 21: MLP projection backward input - [MLP_BACKWARD_INPUT_GRID(h * 4, B, S) blocks, 2D grid]
+        {
+            int op = 21;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + (layer_idx * 14);
+            int expected = CEIL_DIV(B * S * h, thr);
+            dim3 grid = MLP_BACKWARD_INPUT_GRID(h * 4, B, S);
+            int num_blocks_x = grid.x;
+            int num_blocks_y = grid.y;
+
+            for (int by = 0; by < num_blocks_y; by++) {
+                for (int bx = 0; bx < num_blocks_x; bx++) {
+                    all_instructions[instruction_count++] = (instruction_t){
+                        .op = op,
+                        .prev_op = prev_op,
+                        .layer = layer_idx,
+                        .b_x = bx,
+                        .b_y = by,
+                        .bar_idx = bar_idx,
+                        .expected = expected
+                    };
+                }
+            }
+            prev_op = op;
+        }
+
+        // OP 22: MLP projection backward weight - [MLP_BACKWARD_WEIGHT_GRID(h, h * 4) blocks, 2D grid]
+        {
+            int op = 22;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + (layer_idx * 14) + 1;
+            dim3 grid_prev = MLP_BACKWARD_INPUT_GRID(h * 4, B, S);
+            int expected = grid_prev.x * grid_prev.y;
+            dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h, h * 4);
+            int num_blocks_x = grid.x;
+            int num_blocks_y = grid.y;
+
+            for (int by = 0; by < num_blocks_y; by++) {
+                for (int bx = 0; bx < num_blocks_x; bx++) {
+                    all_instructions[instruction_count++] = (instruction_t){
+                        .op = op,
+                        .prev_op = prev_op,
+                        .layer = layer_idx,
+                        .b_x = bx,
+                        .b_y = by,
+                        .bar_idx = bar_idx,
+                        .expected = expected
+                    };
+                }
+            }
+            prev_op = op;
+        }
+
+        // OP 23: GELU backward - [CEIL_DIV(B * S * 4 * h, thr) blocks, 1D grid]
+        {
+            int op = 23;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + (layer_idx * 14) + 2;
+            dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(h, h * 4);
+            int expected = grid_prev.x * grid_prev.y;
+            int num_blocks = CEIL_DIV(B * S * 4 * h, thr);
+
+            for (int block = 0; block < num_blocks; block++) {
+                all_instructions[instruction_count++] = (instruction_t){
+                    .op = op,
+                    .prev_op = prev_op,
+                    .layer = layer_idx,
+                    .b_x = block,
+                    .b_y = -1,
+                    .bar_idx = bar_idx,
+                    .expected = expected
+                };
+            }
+            prev_op = op;
+        }
+
+        // OP 24: MLP FC backward input - [MLP_BACKWARD_INPUT_GRID(h, B, S) blocks, 2D grid]
+        {
+            int op = 24;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + (layer_idx * 14) + 3;
+            int expected = CEIL_DIV(B * S * 4 * h, thr);
+            dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
+            int num_blocks_x = grid.x;
+            int num_blocks_y = grid.y;
+
+            for (int by = 0; by < num_blocks_y; by++) {
+                for (int bx = 0; bx < num_blocks_x; bx++) {
+                    all_instructions[instruction_count++] = (instruction_t){
+                        .op = op,
+                        .prev_op = prev_op,
+                        .layer = layer_idx,
+                        .b_x = bx,
+                        .b_y = by,
+                        .bar_idx = bar_idx,
+                        .expected = expected
+                    };
+                }
+            }
+            prev_op = op;
+        }
+
+        // OP 25: MLP FC backward weight - [MLP_BACKWARD_WEIGHT_GRID(h * 4, h) blocks, 2D grid]
+        {
+            int op = 25;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + (layer_idx * 14) + 4;
+            dim3 grid_prev = MLP_BACKWARD_INPUT_GRID(h, B, S);
+            int expected = grid_prev.x * grid_prev.y;
+            dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h * 4, h);
+            int num_blocks_x = grid.x;
+            int num_blocks_y = grid.y;
+
+            for (int by = 0; by < num_blocks_y; by++) {
+                for (int bx = 0; bx < num_blocks_x; bx++) {
+                    all_instructions[instruction_count++] = (instruction_t){
+                        .op = op,
+                        .prev_op = prev_op,
+                        .layer = layer_idx,
+                        .b_x = bx,
+                        .b_y = by,
+                        .bar_idx = bar_idx,
+                        .expected = expected
+                    };
+                }
+            }
+            prev_op = op;
+        }
+
+        // OP 26: LayerNorm 2 backward - [B blocks, 1D grid]
+        {
+            int op = 26;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + (layer_idx * 14) + 5;
+            dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(h * 4, h);
+            int expected = grid_prev.x * grid_prev.y;
+            int num_blocks = B;
+
+            for (int block = 0; block < num_blocks; block++) {
+                all_instructions[instruction_count++] = (instruction_t){
+                    .op = op,
+                    .prev_op = prev_op,
+                    .layer = layer_idx,
+                    .b_x = block,
+                    .b_y = -1,
+                    .bar_idx = bar_idx,
+                    .expected = expected
+                };
+            }
+            prev_op = op;
+        }
+
+        // OP 27: Residual backward (res_2) - [CEIL_DIV(B * S * h, thr) blocks, 1D grid]
+        {
+            int op = 27;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + (layer_idx * 14) + 6;
+            int expected = B;
+            int num_blocks = CEIL_DIV(B * S * h, thr);
+
+            for (int block = 0; block < num_blocks; block++) {
+                all_instructions[instruction_count++] = (instruction_t){
+                    .op = op,
+                    .prev_op = prev_op,
+                    .layer = layer_idx,
+                    .b_x = block,
+                    .b_y = -1,
+                    .bar_idx = bar_idx,
+                    .expected = expected
+                };
+            }
+            prev_op = op;
+        }
+
+        // OP 28: Attention projection backward input - [MLP_BACKWARD_INPUT_GRID(h, B, S) blocks, 2D grid]
+        {
+            int op = 28;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + (layer_idx * 14) + 7;
+            int expected = CEIL_DIV(B * S * h, thr);
+            dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
+            int num_blocks_x = grid.x;
+            int num_blocks_y = grid.y;
+
+            for (int by = 0; by < num_blocks_y; by++) {
+                for (int bx = 0; bx < num_blocks_x; bx++) {
+                    all_instructions[instruction_count++] = (instruction_t){
+                        .op = op,
+                        .prev_op = prev_op,
+                        .layer = layer_idx,
+                        .b_x = bx,
+                        .b_y = by,
+                        .bar_idx = bar_idx,
+                        .expected = expected
+                    };
+                }
+            }
+            prev_op = op;
+        }
+
+        // OP 29: Attention projection backward weight - [MLP_BACKWARD_WEIGHT_GRID(h, h) blocks, 2D grid]
+        {
+            int op = 29;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + (layer_idx * 14) + 8;
+            dim3 grid_prev = MLP_BACKWARD_INPUT_GRID(h, B, S);
+            int expected = grid_prev.x * grid_prev.y;
+            dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h, h);
+            int num_blocks_x = grid.x;
+            int num_blocks_y = grid.y;
+
+            for (int by = 0; by < num_blocks_y; by++) {
+                for (int bx = 0; bx < num_blocks_x; bx++) {
+                    all_instructions[instruction_count++] = (instruction_t){
+                        .op = op,
+                        .prev_op = prev_op,
+                        .layer = layer_idx,
+                        .b_x = bx,
+                        .b_y = by,
+                        .bar_idx = bar_idx,
+                        .expected = expected
+                    };
+                }
+            }
+            prev_op = op;
+        }
+
+        // OP 30: Attention backward - [CEIL_DIV(B * S * n_head, thr) blocks, 1D grid]
+        {
+            int op = 30;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + (layer_idx * 14) + 9;
+            dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(h, h);
+            int expected = grid_prev.x * grid_prev.y;
+            int num_blocks = CEIL_DIV(B * S * n_head, thr);
+
+            for (int block = 0; block < num_blocks; block++) {
+                all_instructions[instruction_count++] = (instruction_t){
+                    .op = op,
+                    .prev_op = prev_op,
+                    .layer = layer_idx,
+                    .b_x = block,
+                    .b_y = -1,
+                    .bar_idx = bar_idx,
+                    .expected = expected
+                };
+            }
+            prev_op = op;
+        }
+
+        // OP 31: QKV backward input - [MLP_BACKWARD_INPUT_GRID(h, B, S) blocks, 2D grid]
+        {
+            int op = 31;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + (layer_idx * 14) + 10;
+            int expected = CEIL_DIV(B * S * n_head, thr);
+            dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
+            int num_blocks_x = grid.x;
+            int num_blocks_y = grid.y;
+
+            for (int by = 0; by < num_blocks_y; by++) {
+                for (int bx = 0; bx < num_blocks_x; bx++) {
+                    all_instructions[instruction_count++] = (instruction_t){
+                        .op = op,
+                        .prev_op = prev_op,
+                        .layer = layer_idx,
+                        .b_x = bx,
+                        .b_y = by,
+                        .bar_idx = bar_idx,
+                        .expected = expected
+                    };
+                }
+            }
+            prev_op = op;
+        }
+
+        // OP 32: QKV backward weight - [MLP_BACKWARD_WEIGHT_GRID(h * 3, h) blocks, 2D grid]
+        {
+            int op = 32;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + (layer_idx * 14) + 11;
+            dim3 grid_prev = MLP_BACKWARD_INPUT_GRID(h, B, S);
+            int expected = grid_prev.x * grid_prev.y;
+            dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h * 3, h);
+            int num_blocks_x = grid.x;
+            int num_blocks_y = grid.y;
+
+            for (int by = 0; by < num_blocks_y; by++) {
+                for (int bx = 0; bx < num_blocks_x; bx++) {
+                    all_instructions[instruction_count++] = (instruction_t){
+                        .op = op,
+                        .prev_op = prev_op,
+                        .layer = layer_idx,
+                        .b_x = bx,
+                        .b_y = by,
+                        .bar_idx = bar_idx,
+                        .expected = expected
+                    };
+                }
+            }
+            prev_op = op;
+        }
+
+        // OP 33: LayerNorm 1 backward - [B blocks, 1D grid]
+        {
+            int op = 33;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + (layer_idx * 14) + 12;
+            dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(h * 3, h);
+            int expected = grid_prev.x * grid_prev.y;
+            int num_blocks = B;
+
+            for (int block = 0; block < num_blocks; block++) {
+                all_instructions[instruction_count++] = (instruction_t){
+                    .op = op,
+                    .prev_op = prev_op,
+                    .layer = layer_idx,
+                    .b_x = block,
+                    .b_y = -1,
+                    .bar_idx = bar_idx,
+                    .expected = expected
+                };
+            }
+            prev_op = op;
+        }
+    }
+
+    // OP 34: Embedding backward - [CEIL_DIV(B * S, thr) blocks, 1D grid]
+    {
+        int op = 34;
+        int bar_idx = 1 + (L * 10) + 3 + 5 + (0 * 14) + 13;
+        int expected = B;
+        int num_blocks = CEIL_DIV(B * S, thr);
+
+        for (int block = 0; block < num_blocks; block++) {
+            all_instructions[instruction_count++] = (instruction_t){
+                .op = op,
+                .prev_op = prev_op,
+                .layer = -1,
+                .b_x = block,
+                .b_y = -1,
+                .bar_idx = bar_idx,
+                .expected = expected
+            };
+        }
+        prev_op = op;
+    }
+
+    printf("Total instructions scheduled: %d\n", instruction_count);
+
+    // Distribute instructions to SMs in round-robin fashion
+    int *sm_counts = (int *)calloc(NUM_SM, sizeof(int));
+    
+    // First pass: count instructions per SM
+    for (int i = 0; i < instruction_count; i++) {
+        int sm_id = i % NUM_SM;
+        sm_counts[sm_id]++;
+    }
+
+    // Allocate instruction arrays for each SM
+    for (int sm = 0; sm < NUM_SM; sm++) {
+        streams[sm]->n = sm_counts[sm];
+        if (sm_counts[sm] > 0) {
+            streams[sm]->instructions = (instruction_t *)malloc(sm_counts[sm] * sizeof(instruction_t));
+        }
+    }
+
+    // Second pass: distribute instructions
+    int *sm_indices = (int *)calloc(NUM_SM, sizeof(int));
+    for (int i = 0; i < instruction_count; i++) {
+        int sm_id = i % NUM_SM;
+        streams[sm_id]->instructions[sm_indices[sm_id]++] = all_instructions[i];
+    }
+
+    // Cleanup
+    free(all_instructions);
+    free(sm_counts);
+    free(sm_indices);
+
+    printf("Scheduled %d instructions across %d SMs\n", instruction_count, NUM_SM);
+    for (int sm = 0; sm < NUM_SM; sm++) {
+        printf("SM %d: %d instructions\n", sm, streams[sm]->n);
+    }
+}
+
+void free_schedule() {
+    for (int sm = 0; sm < NUM_SM; sm++) {
+        if (streams[sm] != NULL) {
+            if (streams[sm]->instructions != NULL) {
+                free(streams[sm]->instructions);
+            }
+            free(streams[sm]);
+            streams[sm] = NULL;
+        }
+    }
 }
