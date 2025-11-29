@@ -1,6 +1,8 @@
 /* GPT-2 training executable - C implementation */
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 #include <unistd.h>
 #include <cuda_runtime.h>
 
@@ -33,7 +35,7 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort =
 
 config_t config = {
     .vocab_size = 50257,
-    .batch_size = 32,
+    .batch_size = 16,
     .n_layer = 12,
     .n_head = 12,
     .n_embd = 768,
@@ -146,41 +148,15 @@ int main()
     opt_state.m_memory = NULL;  // lazily allocated
     opt_state.v_memory = NULL;  // lazily allocated
 
-    int input_tokens[] = {
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
-    };
-    int seq_len = 10;
+    // Generate random input tokens
+    int seq_len = 33;
+    int total_tokens = config.batch_size * seq_len;
+    int *input_tokens = (int *) malloc(total_tokens * sizeof(int));
+    
+    srand(time(NULL));
+    for (int i = 0; i < total_tokens; i++) {
+        input_tokens[i] = rand() % config.vocab_size;
+    }
     int *d_input_tokens, *d_target_tokens;
     prepare_input_tokens(input_tokens, seq_len, &d_input_tokens, &d_target_tokens);
     setup_train_buffers(&buffers, seq_len);
@@ -224,6 +200,7 @@ int main()
     printf("Predicted next token ID: %d\n", predicted_token);
 
     gpuErrchk(cudaFree(d_input_tokens));
+    free(input_tokens);
     free_train_buffers(&buffers);
     free_train_buffers(&g_buffers);
     
