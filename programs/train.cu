@@ -33,7 +33,7 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort =
 
 config_t config = {
     .vocab_size = 50257,
-    .batch_size = 8,
+    .batch_size = 32,
     .n_layer = 12,
     .n_head = 12,
     .n_embd = 768,
@@ -99,6 +99,8 @@ void forward(const int *d_input_tokens, int seq_len);
 void cross_entropy(const int *d_target_tokens, int seq_len);
 void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len);
 void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt);
+void gpt2_zero_grad(gpt2_t *grads);
+void zero_activation_grads(train_buffers_t *g_buffers);
 int extract_greedy_token(int seq_len, tensor_t *logits);
 
 int main()
@@ -153,10 +155,34 @@ int main()
         464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
         464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
         464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
+        464, 3139, 286, 4881, 318, 464, 3139, 286, 4881, 318,
     };
     int seq_len = 10;
     int *d_input_tokens, *d_target_tokens;
-    prepare_input_tokens(input_tokens, config.batch_size * seq_len, &d_input_tokens, &d_target_tokens);
+    prepare_input_tokens(input_tokens, seq_len, &d_input_tokens, &d_target_tokens);
     setup_train_buffers(&buffers, seq_len);
     setup_train_buffers(&g_buffers, seq_len);
     seq_len -= 1; // because target is shifted by 1
@@ -166,12 +192,16 @@ int main()
     cudaEventCreate(&stop);
     cudaEventRecord(start);
 
+    gpt2_zero_grad(&g_model);
+    zero_activation_grads(&g_buffers);
     forward(d_input_tokens, seq_len);
     cross_entropy(d_target_tokens, seq_len);
     backward(d_input_tokens, d_target_tokens, seq_len);
 
     gpt2_update(&model, &g_model, &opt_state);
 
+    gpt2_zero_grad(&g_model);
+    zero_activation_grads(&g_buffers);
     forward(d_input_tokens, seq_len);
     cross_entropy(d_target_tokens, seq_len);
     backward(d_input_tokens, d_target_tokens, seq_len);
@@ -210,23 +240,24 @@ int prepare_input_tokens(int *input_tokens, int seq_len, int **d_input_tokens, i
 {
     // input_tokens: [B, S]
     // prepare input as input_tokens[:, :seq_len-1] and target as input_tokens[:, 1:seq_len]
-    int size = sizeof(int) * config.batch_size * seq_len;
-    int *h_input = (int *) malloc(size);
-    int *h_target = (int *) malloc(size);
+    int input_size = config.batch_size * (seq_len - 1);
+    int *h_input = (int *) malloc(input_size * sizeof(int));
+    int *h_target = (int *) malloc(input_size * sizeof(int));
+    
     for (int b = 0; b < config.batch_size; b++) {
-        for (int s = 0; s < seq_len; s++) {
-            h_input[b * seq_len + s] = input_tokens[b * seq_len + s];
-            if (s > 0) {
-                h_target[b * seq_len + (s - 1)] = input_tokens[b * seq_len + s];
-            }
+        for (int s = 0; s < seq_len - 1; s++) {
+            // Input: first seq_len-1 tokens
+            h_input[b * (seq_len - 1) + s] = input_tokens[b * seq_len + s];
+            // Target: tokens 1 through seq_len (shifted by 1)
+            h_target[b * (seq_len - 1) + s] = input_tokens[b * seq_len + s + 1];
         }
     }
 
-    gpuErrchk(cudaMalloc((void **)d_input_tokens, (seq_len - 1) * sizeof(int)));
-    gpuErrchk(cudaMemcpy(*d_input_tokens, h_input, (seq_len - 1) * sizeof(int), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMalloc((void **)d_input_tokens, input_size * sizeof(int)));
+    gpuErrchk(cudaMemcpy(*d_input_tokens, h_input, input_size * sizeof(int), cudaMemcpyHostToDevice));
 
-    gpuErrchk(cudaMalloc((void **)d_target_tokens, (seq_len - 1) * sizeof(int)));
-    gpuErrchk(cudaMemcpy(*d_target_tokens, h_target, (seq_len - 1) * sizeof(int), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMalloc((void **)d_target_tokens, input_size * sizeof(int)));
+    gpuErrchk(cudaMemcpy(*d_target_tokens, h_target, input_size * sizeof(int), cudaMemcpyHostToDevice));
 
     free(h_input);
     free(h_target);
@@ -253,7 +284,7 @@ int setup_train_buffers(train_buffers_t *buffers, int seq_len)
         layer_buffers_t *layer_bufs = &buffers->blocks[i];
 
         int ln1_shape[3] = {B, S, h};
-        int ln1_mean_shape[2] = {B, h};
+        int ln1_mean_shape[2] = {B, S};
         int qkv_shape[3] = {B, S, 3 * h};
         int atty_shape[3] = {B, S, h};
         int preatt_shape[4] = {B, n_head, S, S};
@@ -261,7 +292,7 @@ int setup_train_buffers(train_buffers_t *buffers, int seq_len)
         int att_proj_shape[3] = {B, S, h};
         int res_shape[3] = {B, S, h};
         int ln2_shape[3] = {B, S, h};
-        int ln2_mean_shape[2] = {B, h};
+        int ln2_mean_shape[2] = {B, S};
         int mlp_fc_shape[3] = {B, S, four_h};
         int mlp_fc_gelu_shape[3] = {B, S, four_h};
         int mlp_proj_shape[3] = {B, S, h};
@@ -285,7 +316,7 @@ int setup_train_buffers(train_buffers_t *buffers, int seq_len)
     }
 
     int ln_f_shape[3] = {B, S, h};
-    int ln_f_mean_shape[2] = {B, h};
+    int ln_f_mean_shape[2] = {B, S};
     int logits_shape[3] = {B, S, V};
     int probs_shape[3] = {B, S, V};
     int losses_shape[2] = {B, S};
@@ -492,6 +523,42 @@ void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt) {
     );
     
     gpuErrchk(cudaGetLastError());
+}
+
+void gpt2_zero_grad(gpt2_t *grads) {
+    gpuErrchk(cudaMemset(grads->params_memory, 0, grads->num_parameters * sizeof(float)));
+}
+
+void zero_activation_grads(train_buffers_t *g_buffers) {
+    gpuErrchk(cudaMemset(g_buffers->encoded->data, 0, tensor_size(g_buffers->encoded) * sizeof(float)));
+    
+    for (int i = 0; i < config.n_layer; i++) {
+        layer_buffers_t *g_layer = &g_buffers->blocks[i];
+        
+        gpuErrchk(cudaMemset(g_layer->ln_1->data, 0, tensor_size(g_layer->ln_1) * sizeof(float)));
+        gpuErrchk(cudaMemset(g_layer->ln_1_mean->data, 0, tensor_size(g_layer->ln_1_mean) * sizeof(float)));
+        gpuErrchk(cudaMemset(g_layer->ln_1_rstd->data, 0, tensor_size(g_layer->ln_1_rstd) * sizeof(float)));
+        gpuErrchk(cudaMemset(g_layer->qkv->data, 0, tensor_size(g_layer->qkv) * sizeof(float)));
+        gpuErrchk(cudaMemset(g_layer->atty->data, 0, tensor_size(g_layer->atty) * sizeof(float)));
+        gpuErrchk(cudaMemset(g_layer->preatt->data, 0, tensor_size(g_layer->preatt) * sizeof(float)));
+        gpuErrchk(cudaMemset(g_layer->att->data, 0, tensor_size(g_layer->att) * sizeof(float)));
+        gpuErrchk(cudaMemset(g_layer->att_proj->data, 0, tensor_size(g_layer->att_proj) * sizeof(float)));
+        gpuErrchk(cudaMemset(g_layer->res_2->data, 0, tensor_size(g_layer->res_2) * sizeof(float)));
+        gpuErrchk(cudaMemset(g_layer->ln_2->data, 0, tensor_size(g_layer->ln_2) * sizeof(float)));
+        gpuErrchk(cudaMemset(g_layer->ln_2_mean->data, 0, tensor_size(g_layer->ln_2_mean) * sizeof(float)));
+        gpuErrchk(cudaMemset(g_layer->ln_2_rstd->data, 0, tensor_size(g_layer->ln_2_rstd) * sizeof(float)));
+        gpuErrchk(cudaMemset(g_layer->mlp_fc->data, 0, tensor_size(g_layer->mlp_fc) * sizeof(float)));
+        gpuErrchk(cudaMemset(g_layer->mlp_fc_gelu->data, 0, tensor_size(g_layer->mlp_fc_gelu) * sizeof(float)));
+        gpuErrchk(cudaMemset(g_layer->mlp_proj->data, 0, tensor_size(g_layer->mlp_proj) * sizeof(float)));
+        gpuErrchk(cudaMemset(g_layer->res_3->data, 0, tensor_size(g_layer->res_3) * sizeof(float)));
+    }
+    
+    gpuErrchk(cudaMemset(g_buffers->ln_f->data, 0, tensor_size(g_buffers->ln_f) * sizeof(float)));
+    gpuErrchk(cudaMemset(g_buffers->ln_f_mean->data, 0, tensor_size(g_buffers->ln_f_mean) * sizeof(float)));
+    gpuErrchk(cudaMemset(g_buffers->ln_f_rstd->data, 0, tensor_size(g_buffers->ln_f_rstd) * sizeof(float)));
+    gpuErrchk(cudaMemset(g_buffers->logits->data, 0, tensor_size(g_buffers->logits) * sizeof(float)));
+    gpuErrchk(cudaMemset(g_buffers->probs->data, 0, tensor_size(g_buffers->probs) * sizeof(float)));
+    gpuErrchk(cudaMemset(g_buffers->losses->data, 0, tensor_size(g_buffers->losses) * sizeof(float)));
 }
 
 int extract_greedy_token(int seq_len, tensor_t *logits) {
