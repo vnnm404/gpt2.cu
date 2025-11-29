@@ -17,6 +17,17 @@
 #include "gpt2/layers/cross_entropy.h"
 #include "gpt2/layers/adamw.h"
 
+#include "../src/layers/embedding.cu"
+#include "../src/layers/layernorm.cu"
+#include "../src/layers/mlp.cu"
+#include "../src/layers/attention.cu"
+#include "../src/layers/residual.cu"
+#include "../src/layers/gelu.cu"
+#include "../src/layers/softmax.cu"
+#include "../src/layers/cross_entropy.cu"
+#include "../src/layers/adamw.cu"
+
+
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
 #define NUM_SM 28
 
@@ -45,6 +56,10 @@ config_t config = {
 
 gpt2_t model;
 gpt2_t g_model;  // model weight gradients
+
+// Device copies for kernel
+gpt2_t *d_model;
+gpt2_t *d_g_model;
 
 typedef struct
 {
@@ -81,6 +96,10 @@ typedef struct
 train_buffers_t buffers;
 train_buffers_t g_buffers;
 
+// Device copies for kernel
+train_buffers_t *d_buffers;
+train_buffers_t *d_g_buffers;
+
 // AdamW optimizer state
 typedef struct {
     float *m_memory;  // first moment estimates
@@ -112,7 +131,8 @@ typedef struct {
 } stream_t;
 
 int *bar;  // [B, 1 + (L * 10 + 3) + 1 + (5 + L * 14 + 1)] global atomics
-stream_t *streams[NUM_SM];
+stream_t *streams[NUM_SM];  // Host streams
+stream_t **d_streams;  // Device streams array
 
 int prepare_input_tokens(int *input_tokens, int seq_len, int **d_input_tokens, int **d_target_tokens);
 int setup_train_buffers(train_buffers_t *buffers, int seq_len);
@@ -124,17 +144,17 @@ void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt);
 void gpt2_zero_grad(gpt2_t *grads);
 void zero_activation_grads(train_buffers_t *g_buffers);
 int extract_greedy_token(int seq_len, tensor_t *logits);
-void schedule_instructions(int seq_len);
-void free_schedule();
+stream_t** schedule_instructions(int seq_len);
+void free_schedule(stream_t **d_streams);
 
-__global__ void megakernel_execute(
+__global__ void megakernel(
     config_t config,
 
-    gpt2_t model,
-    gpt2_t g_model,
+    gpt2_t *model,
+    gpt2_t *g_model,
 
-    train_buffers_t buffers,
-    train_buffers_t g_buffers,
+    train_buffers_t *buffers,
+    train_buffers_t *g_buffers,
 
     adamw_state_t opt_state,
 
@@ -144,6 +164,44 @@ __global__ void megakernel_execute(
 
     int *bar,
     stream_t **streams
+);
+
+__device__ void execute_stream(
+    config_t config,
+
+    gpt2_t *model,
+    gpt2_t *g_model,
+
+    train_buffers_t *buffers,
+    train_buffers_t *g_buffers,
+
+    adamw_state_t opt_state,
+
+    int seq_len,
+    const int *d_input_tokens,
+    const int *d_target_tokens,
+
+    int *bar,
+    stream_t *stream
+);
+
+__device__ void execute_instruction(
+    config_t config,
+
+    gpt2_t *model,
+    gpt2_t *g_model,
+
+    train_buffers_t *buffers,
+    train_buffers_t *g_buffers,
+
+    adamw_state_t opt_state,
+
+    int seq_len,
+    const int *d_input_tokens,
+    const int *d_target_tokens,
+
+    int *bar,
+    instruction_t instr
 );
 
 int main()
@@ -204,11 +262,52 @@ int main()
     setup_train_buffers(&g_buffers, seq_len);
     seq_len -= 1; // because target is shifted by 1
 
-    schedule_instructions(seq_len);
+    d_streams = schedule_instructions(seq_len);
 
-    // TODO: megakernel stuff
+    // Allocate device memory for structs
+    gpuErrchk(cudaMalloc(&d_model, sizeof(gpt2_t)));
+    gpuErrchk(cudaMalloc(&d_g_model, sizeof(gpt2_t)));
+    gpuErrchk(cudaMalloc(&d_buffers, sizeof(train_buffers_t)));
+    gpuErrchk(cudaMalloc(&d_g_buffers, sizeof(train_buffers_t)));
+    
+    // Copy structs to device
+    gpuErrchk(cudaMemcpy(d_model, &model, sizeof(gpt2_t), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_g_model, &g_model, sizeof(gpt2_t), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_buffers, &buffers, sizeof(train_buffers_t), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_g_buffers, &g_buffers, sizeof(train_buffers_t), cudaMemcpyHostToDevice));
 
-    free_schedule();
+    // allocate global bar
+    int bar_size = config.batch_size * (1 + (config.n_layer * 10 + 3) + 1 + (5 + config.n_layer * 14 + 1));
+    gpuErrchk(cudaMalloc(&bar, bar_size * sizeof(int)));
+    gpuErrchk(cudaMemset(bar, 0, bar_size * sizeof(int)));
+
+    // Launch megakernel with shared memory for MLP tiling (2 * TILE_SIZE * TILE_SIZE floats)
+    int shared_mem_size = 2 * 32 * 32 * sizeof(float);  // TILE_SIZE = 32
+    int threads_per_block = 256;  // Reduced from 1024 to balance resources with shared memory
+    printf("Shared memory size per block: %d bytes\n", shared_mem_size);
+    megakernel<<<NUM_SM, threads_per_block, shared_mem_size>>>(
+        config,
+        d_model,
+        d_g_model,
+        d_buffers,
+        d_g_buffers,
+        opt_state,
+        seq_len,
+        d_input_tokens,
+        d_target_tokens,
+        bar,
+        d_streams
+    );
+    gpuErrchk(cudaGetLastError());
+    gpuErrchk(cudaDeviceSynchronize());
+
+    free_schedule(d_streams);
+
+    // Free device struct memory
+    gpuErrchk(cudaFree(d_model));
+    gpuErrchk(cudaFree(d_g_model));
+    gpuErrchk(cudaFree(d_buffers));
+    gpuErrchk(cudaFree(d_g_buffers));
 
     // cudaEvent_t start, stop;
     // cudaEventCreate(&start);
@@ -681,7 +780,7 @@ int extract_greedy_token(int seq_len, tensor_t *logits) {
     return max_token;
 }
 
-void schedule_instructions(int seq_len) {
+stream_t** schedule_instructions(int seq_len) {
     int L = config.n_layer;
     int B = config.batch_size;
     int S = seq_len;
@@ -1537,9 +1636,68 @@ void schedule_instructions(int seq_len) {
     for (int sm = 0; sm < NUM_SM; sm++) {
         printf("SM %d: %d instructions\n", sm, streams[sm]->n);
     }
+
+    // Allocate device memory for streams and instructions
+    stream_t **d_streams_ptr;
+    stream_t *d_stream_structs[NUM_SM];
+    
+    // Allocate device memory for the streams array pointer
+    gpuErrchk(cudaMalloc(&d_streams_ptr, NUM_SM * sizeof(stream_t*)));
+    
+    // For each SM, allocate device memory for stream struct and instructions
+    for (int sm = 0; sm < NUM_SM; sm++) {
+        stream_t *d_stream;
+        instruction_t *d_instructions = NULL;
+        
+        // Allocate device memory for stream struct
+        gpuErrchk(cudaMalloc(&d_stream, sizeof(stream_t)));
+        
+        // Allocate and copy instructions if any
+        if (streams[sm]->n > 0) {
+            gpuErrchk(cudaMalloc(&d_instructions, streams[sm]->n * sizeof(instruction_t)));
+            gpuErrchk(cudaMemcpy(d_instructions, streams[sm]->instructions, 
+                                streams[sm]->n * sizeof(instruction_t), cudaMemcpyHostToDevice));
+        }
+        
+        // Create temporary stream struct with device instruction pointer
+        stream_t temp_stream = {streams[sm]->n, d_instructions};
+        
+        // Copy stream struct to device
+        gpuErrchk(cudaMemcpy(d_stream, &temp_stream, sizeof(stream_t), cudaMemcpyHostToDevice));
+        
+        d_stream_structs[sm] = d_stream;
+    }
+    
+    // Copy array of device stream pointers to device
+    gpuErrchk(cudaMemcpy(d_streams_ptr, d_stream_structs, NUM_SM * sizeof(stream_t*), cudaMemcpyHostToDevice));
+    
+    return d_streams_ptr;
 }
 
-void free_schedule() {
+void free_schedule(stream_t **d_streams_ptr) {
+    // First, copy device stream pointers back to host to free instruction arrays
+    stream_t *d_stream_structs[NUM_SM];
+    gpuErrchk(cudaMemcpy(d_stream_structs, d_streams_ptr, NUM_SM * sizeof(stream_t*), cudaMemcpyDeviceToHost));
+    
+    // Free device memory for each stream
+    for (int sm = 0; sm < NUM_SM; sm++) {
+        // Copy stream struct back to get instruction pointer
+        stream_t temp_stream;
+        gpuErrchk(cudaMemcpy(&temp_stream, d_stream_structs[sm], sizeof(stream_t), cudaMemcpyDeviceToHost));
+        
+        // Free device instructions if any
+        if (temp_stream.instructions != NULL) {
+            gpuErrchk(cudaFree(temp_stream.instructions));
+        }
+        
+        // Free device stream struct
+        gpuErrchk(cudaFree(d_stream_structs[sm]));
+    }
+    
+    // Free device streams array
+    gpuErrchk(cudaFree(d_streams_ptr));
+    
+    // Free host memory
     for (int sm = 0; sm < NUM_SM; sm++) {
         if (streams[sm] != NULL) {
             if (streams[sm]->instructions != NULL) {
@@ -1548,5 +1706,503 @@ void free_schedule() {
             free(streams[sm]);
             streams[sm] = NULL;
         }
+    }
+}
+
+__global__ void megakernel(
+    config_t config,
+
+    gpt2_t *model,
+    gpt2_t *g_model,
+
+    train_buffers_t *buffers,
+    train_buffers_t *g_buffers,
+
+    adamw_state_t opt_state,
+
+    int seq_len,
+    const int *d_input_tokens,
+    const int *d_target_tokens,
+
+    int *bar,
+    stream_t **streams
+) {
+    int sm_id = blockIdx.x;  // Each SM gets its own block
+    stream_t *stream = streams[sm_id];
+    execute_stream(config, model, g_model, buffers, g_buffers, opt_state, seq_len, d_input_tokens, d_target_tokens, bar, stream);
+}
+
+__device__ void execute_stream(
+    config_t config,
+
+    gpt2_t *model,
+    gpt2_t *g_model,
+
+    train_buffers_t *buffers,
+    train_buffers_t *g_buffers,
+
+    adamw_state_t opt_state,
+
+    int seq_len,
+    const int *d_input_tokens,
+    const int *d_target_tokens,
+
+    int *bar,
+    stream_t *stream
+) {
+    if (threadIdx.x == 0) {
+        printf("SM %d starting execution of %d instructions\n", blockIdx.x, stream->n);
+    }
+    for (int i = 0; i < stream->n; i++) {
+        instruction_t instr = stream->instructions[i];
+        execute_instruction(config, model, g_model, buffers, g_buffers, opt_state, seq_len, d_input_tokens, d_target_tokens, bar, instr);
+    }
+}
+
+__device__ void execute_instruction(
+    config_t config,
+
+    gpt2_t *model,
+    gpt2_t *g_model,
+
+    train_buffers_t *buffers,
+    train_buffers_t *g_buffers,
+
+    adamw_state_t opt_state,
+
+    int seq_len,
+    const int *d_input_tokens,
+    const int *d_target_tokens,
+
+    int *bar,
+    instruction_t instr
+) {
+    int L = config.n_layer;
+    int B = config.batch_size;
+    int S = seq_len;
+    int h = config.n_embd;
+    int n_head = config.n_head;
+    int V = config.vocab_size;
+
+    volatile int *vbar = (volatile int *)bar;
+
+    // Shared memory for MLP operations (2 * TILE_SIZE * TILE_SIZE floats)
+    extern __shared__ float shared_mem[];
+
+    switch (instr.op) {
+        case 1: {
+            // OP 1: Embedding forward
+            embedding_forward_device(buffers->encoded.data, d_input_tokens, model->emb.wte.data, model->emb.wpe.data, S, h, V, config.n_positions, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 2: {
+            // OP 2: LayerNorm 1
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+
+            float *res = (instr.layer == 0) ? buffers->encoded.data : buffers->blocks[instr.layer - 1].res_3.data;
+            layernorm_forward_device(buffers->blocks[instr.layer].ln_1.data, res, model->h[instr.layer].ln_1.w.data, model->h[instr.layer].ln_1.b.data, buffers->blocks[instr.layer].ln_1_mean.data, buffers->blocks[instr.layer].ln_1_rstd.data, S, h, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 3: {
+            // OP 3: QKV projection
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            mlp_forward_device(buffers->blocks[instr.layer].qkv.data, buffers->blocks[instr.layer].ln_1.data, model->h[instr.layer].attn.qkv_w.data, model->h[instr.layer].attn.qkv_b.data, B, S, h, h * 3, instr.b_x, instr.b_y, shared_mem);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 4: {
+            // OP 4: Attention
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            attention_forward_device(buffers->blocks[instr.layer].atty.data, buffers->blocks[instr.layer].preatt.data, buffers->blocks[instr.layer].att.data, buffers->blocks[instr.layer].qkv.data, B, S, n_head, h, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 5: {
+            // OP 5: Attention projection
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            mlp_forward_device(buffers->blocks[instr.layer].att_proj.data, buffers->blocks[instr.layer].atty.data, model->h[instr.layer].attn.proj_w.data, model->h[instr.layer].attn.proj_b.data, B, S, h, h, instr.b_x, instr.b_y, shared_mem);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 6: {
+            // OP 6: Residual 2
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            float *res = (instr.layer == 0) ? buffers->encoded.data : buffers->blocks[instr.layer - 1].res_3.data;
+            residual_forward_device(buffers->blocks[instr.layer].res_2.data, buffers->blocks[instr.layer].att_proj.data, res, B, S, h, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 7: {
+            // OP 7: LayerNorm 2
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            layernorm_forward_device(buffers->blocks[instr.layer].ln_2.data, buffers->blocks[instr.layer].res_2.data, model->h[instr.layer].ln_2.w.data, model->h[instr.layer].ln_2.b.data, buffers->blocks[instr.layer].ln_2_mean.data, buffers->blocks[instr.layer].ln_2_rstd.data, S, h, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 8: {
+            // OP 8: MLP FC
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            mlp_forward_device(buffers->blocks[instr.layer].mlp_fc.data, buffers->blocks[instr.layer].ln_2.data, model->h[instr.layer].mlp.fc_w.data, model->h[instr.layer].mlp.fc_b.data, B, S, h, h * 4, instr.b_x, instr.b_y, shared_mem);
+            atomicAdd(&bar[instr.bar_idx + 1], 1);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 9: {
+            // OP 9: GELU
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            gelu_forward_device(buffers->blocks[instr.layer].mlp_fc_gelu.data, buffers->blocks[instr.layer].mlp_fc.data, B, S, h * 4, instr.b_x);
+            atomicAdd(&bar[instr.bar_idx + 1], 1);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 10: {
+            // OP 10: MLP projection
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            mlp_forward_device(buffers->blocks[instr.layer].mlp_proj.data, buffers->blocks[instr.layer].mlp_fc_gelu.data, model->h[instr.layer].mlp.proj_w.data, model->h[instr.layer].mlp.proj_b.data, B, S, h * 4, h, instr.b_x, instr.b_y, shared_mem);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 11: {
+            // OP 11: Residual 3
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+
+            residual_forward_device(buffers->blocks[instr.layer].res_3.data, buffers->blocks[instr.layer].mlp_proj.data, buffers->blocks[instr.layer].res_2.data, B, S, h, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 12: {
+            // OP 12: Final LayerNorm
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+
+            layernorm_forward_device(buffers->ln_f.data, buffers->blocks[L - 1].res_3.data, model->ln_f.w.data, model->ln_f.b.data, buffers->ln_f_mean.data, buffers->ln_f_rstd.data, S, h, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 13: {
+            // OP 13: Logits
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            mlp_forward_device(buffers->logits.data, buffers->ln_f.data, model->emb.wte.data, NULL, B, S, h, V, instr.b_x, instr.b_y, shared_mem);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 14: {
+            // OP 14: Softmax
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            softmax_forward_device(buffers->probs.data, buffers->logits.data, B, S, V, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 15: {
+            // OP 15: Cross-entropy forward
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            cross_entropy_forward_device(buffers->losses.data, buffers->probs.data, d_target_tokens, B, S, V, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 16: {
+            // OP 16: Cross-entropy backward
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            cross_entropy_backward_device(g_buffers->logits.data, buffers->probs.data, d_target_tokens, B, S, V, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 17: {
+            // OP 17: Logits backward (input gradient)
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            mlp_backward_input_device(g_buffers->ln_f.data, g_buffers->logits.data, model->emb.wte.data, B, S, h, V, instr.b_x, instr.b_y, shared_mem);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 18: {
+            // OP 18: Embedding weight gradient
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            mlp_backward_weight_device(g_model->emb.wte.data, NULL, g_buffers->logits.data, buffers->ln_f.data, B, S, h, V, instr.b_x, instr.b_y, shared_mem);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 19: {
+            // OP 19: Final LayerNorm backward
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            layernorm_backward_device(g_buffers->blocks[L - 1].res_3.data, g_model->ln_f.w.data, g_model->ln_f.b.data, g_buffers->ln_f.data, buffers->blocks[L - 1].res_3.data, model->ln_f.w.data, buffers->ln_f_mean.data, buffers->ln_f_rstd.data, B, S, h, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 20: {
+            // OP 20: Residual backward (res_3)
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            residual_backward_device(g_buffers->blocks[instr.layer].res_2.data, g_buffers->blocks[instr.layer].mlp_proj.data, g_buffers->blocks[instr.layer].res_3.data, B * S * h, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 21: {
+            // OP 21: MLP projection backward input
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            mlp_backward_input_device(g_buffers->blocks[instr.layer].mlp_fc_gelu.data, g_buffers->blocks[instr.layer].mlp_proj.data, model->h[instr.layer].mlp.proj_w.data, B, S, h * 4, h, instr.b_x, instr.b_y, shared_mem);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 22: {
+            // OP 22: MLP projection backward weight
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            mlp_backward_weight_device(g_model->h[instr.layer].mlp.proj_w.data, g_model->h[instr.layer].mlp.proj_b.data, g_buffers->blocks[instr.layer].mlp_proj.data, buffers->blocks[instr.layer].mlp_fc_gelu.data, B, S, h * 4, h, instr.b_x, instr.b_y, shared_mem);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 23: {
+            // OP 23: GELU backward
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            gelu_backward_device(g_buffers->blocks[instr.layer].mlp_fc.data, buffers->blocks[instr.layer].mlp_fc.data, g_buffers->blocks[instr.layer].mlp_fc_gelu.data, B * S * 4 * h, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 24: {
+            // OP 24: MLP FC backward input
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            mlp_backward_input_device(g_buffers->blocks[instr.layer].ln_2.data, g_buffers->blocks[instr.layer].mlp_fc.data, model->h[instr.layer].mlp.fc_w.data, B, S, h, h * 4, instr.b_x, instr.b_y, shared_mem);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 25: {
+            // OP 25: MLP FC backward weight
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            mlp_backward_weight_device(g_model->h[instr.layer].mlp.fc_w.data, g_model->h[instr.layer].mlp.fc_b.data, g_buffers->blocks[instr.layer].mlp_fc.data, buffers->blocks[instr.layer].ln_2.data, B, S, h, h * 4, instr.b_x, instr.b_y, shared_mem);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 26: {
+            // OP 26: LayerNorm 2 backward
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            layernorm_backward_device(g_buffers->blocks[instr.layer].res_2.data, g_model->h[instr.layer].ln_2.w.data, g_model->h[instr.layer].ln_2.b.data, g_buffers->blocks[instr.layer].ln_2.data, buffers->blocks[instr.layer].res_2.data, model->h[instr.layer].ln_2.w.data, buffers->blocks[instr.layer].ln_2_mean.data, buffers->blocks[instr.layer].ln_2_rstd.data, B, S, h, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 27: {
+            // OP 27: Residual backward (res_2)
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            float *g_res = (instr.layer == 0) ? g_buffers->encoded.data : g_buffers->blocks[instr.layer - 1].res_3.data;
+            residual_backward_device(g_res, g_buffers->blocks[instr.layer].att_proj.data, g_buffers->blocks[instr.layer].res_2.data, B * S * h, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 28: {
+            // OP 28: Attention projection backward input
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            mlp_backward_input_device(g_buffers->blocks[instr.layer].atty.data, g_buffers->blocks[instr.layer].att_proj.data, model->h[instr.layer].attn.proj_w.data, B, S, h, h, instr.b_x, instr.b_y, shared_mem);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 29: {
+            // OP 29: Attention projection backward weight
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            mlp_backward_weight_device(g_model->h[instr.layer].attn.proj_w.data, g_model->h[instr.layer].attn.proj_b.data, g_buffers->blocks[instr.layer].att_proj.data, buffers->blocks[instr.layer].atty.data, B, S, h, h, instr.b_x, instr.b_y, shared_mem);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 30: {
+            // OP 30: Attention backward
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            attention_backward_device(g_buffers->blocks[instr.layer].qkv.data, g_buffers->blocks[instr.layer].preatt.data, g_buffers->blocks[instr.layer].att.data, g_buffers->blocks[instr.layer].atty.data, buffers->blocks[instr.layer].qkv.data, buffers->blocks[instr.layer].att.data, B, S, h, n_head, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 31: {
+            // OP 31: QKV backward input
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            mlp_backward_input_device(g_buffers->blocks[instr.layer].ln_1.data, g_buffers->blocks[instr.layer].qkv.data, model->h[instr.layer].attn.qkv_w.data, B, S, h, h * 3, instr.b_x, instr.b_y, shared_mem);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 32: {
+            // OP 32: QKV backward weight
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            mlp_backward_weight_device(g_model->h[instr.layer].attn.qkv_w.data, g_model->h[instr.layer].attn.qkv_b.data, g_buffers->blocks[instr.layer].qkv.data, buffers->blocks[instr.layer].ln_1.data, B, S, h, h * 3, instr.b_x, instr.b_y, shared_mem);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 33: {
+            // OP 33: LayerNorm 1 backward
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            float *g_res = (instr.layer == 0) ? g_buffers->encoded.data : g_buffers->blocks[instr.layer - 1].res_3.data;
+            float *res = (instr.layer == 0) ? buffers->encoded.data : buffers->blocks[instr.layer - 1].res_3.data;
+            layernorm_backward_device(g_res, g_model->h[instr.layer].ln_1.w.data, g_model->h[instr.layer].ln_1.b.data, g_buffers->blocks[instr.layer].ln_1.data, res, model->h[instr.layer].ln_1.w.data, buffers->blocks[instr.layer].ln_1_mean.data, buffers->blocks[instr.layer].ln_1_rstd.data, B, S, h, instr.b_x);
+            if (threadIdx.x == 0) {
+                atomicAdd(&bar[instr.bar_idx + 1], 1);
+            }
+            break;
+        }
+
+        case 34: {
+            // OP 34: Embedding backward
+            while (vbar[instr.bar_idx] < instr.expected) {
+                // __nanosleep(10);
+            }
+            embedding_backward_device(g_model->emb.wte.data, g_model->emb.wpe.data, g_buffers->encoded.data, d_input_tokens, B, S, h, instr.b_x);
+            break;
+        }
+
+        default:
+            break;
     }
 }
