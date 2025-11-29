@@ -497,8 +497,7 @@ void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len
 
     int thr = 256;
 
-    cross_entropy_backward_init<<<CEIL_DIV(B * S, thr), thr>>>(g_buffers.losses.data, B, S);
-    cross_entropy_backward<<<CEIL_DIV(B * S * V, thr), thr>>>(g_buffers.logits.data, g_buffers.losses.data, buffers.probs.data, d_target_tokens, B, S, V);
+    cross_entropy_backward<<<CEIL_DIV(B * S, thr), thr>>>(g_buffers.logits.data, buffers.probs.data, d_target_tokens, B, S, V);
 
     mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_buffers.ln_f.data, g_buffers.logits.data, model.emb.wte.data, B, S, h, V);
     mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(V, h), MLP_BLOCK_DIM>>>(g_model.emb.wte.data, NULL, g_buffers.logits.data, buffers.ln_f.data, B, S, h, V);

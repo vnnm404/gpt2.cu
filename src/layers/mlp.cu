@@ -10,15 +10,15 @@
 // w: [input_dim, output_dim]
 // b: [output_dim]
 // Launch with: dim3 grid((output_dim + TILE_SIZE - 1) / TILE_SIZE, (batch_size * seq_len + TILE_SIZE - 1) / TILE_SIZE);
-//              dim3 block(TILE_SIZE, TILE_SIZE);
+//              dim3 block(TILE_SIZE * TILE_SIZE);
 __global__ void mlp_forward(float *out, const float *input, const float *w, const float *b, int batch_size, int seq_len, int input_dim, int output_dim) {
     // Shared memory for tiling
     __shared__ float s_input[TILE_SIZE][TILE_SIZE];
     __shared__ float s_weight[TILE_SIZE][TILE_SIZE];
     
-    // Thread indices within block
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
+    // Thread indices within block - extract 2D from 1D
+    int tx = threadIdx.x % TILE_SIZE;
+    int ty = threadIdx.x / TILE_SIZE;
     
     // Global output position
     int out_col = blockIdx.x * TILE_SIZE + tx;  // output dimension
@@ -70,13 +70,13 @@ __global__ void mlp_forward(float *out, const float *input, const float *w, cons
 // weight: [input_dim, output_dim] - forward pass weights
 // Computes: g_input = g_out @ weight^T
 // Launch with: dim3 grid((input_dim + TILE_SIZE - 1) / TILE_SIZE, (batch_size * seq_len + TILE_SIZE - 1) / TILE_SIZE);
-//              dim3 block(TILE_SIZE, TILE_SIZE);
+//              dim3 block(TILE_SIZE * TILE_SIZE);
 __global__ void mlp_backward_input(float *g_input, const float *g_out, const float *weight, int batch_size, int seq_len, int input_dim, int output_dim) {
     __shared__ float s_g_out[TILE_SIZE][TILE_SIZE];
     __shared__ float s_weight[TILE_SIZE][TILE_SIZE];
     
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
+    int tx = threadIdx.x % TILE_SIZE;
+    int ty = threadIdx.x / TILE_SIZE;
     
     int in_col = blockIdx.x * TILE_SIZE + tx;   // input_dim
     int in_row = blockIdx.y * TILE_SIZE + ty;   // batch * seq_len
@@ -126,13 +126,13 @@ __global__ void mlp_backward_input(float *g_input, const float *g_out, const flo
 // input: [batch_size, seq_len, input_dim] - forward pass input
 // Computes: g_weight = input^T @ g_out
 // Launch with: dim3 grid((output_dim + TILE_SIZE - 1) / TILE_SIZE, (input_dim + TILE_SIZE - 1) / TILE_SIZE);
-//              dim3 block(TILE_SIZE, TILE_SIZE);
+//              dim3 block(TILE_SIZE * TILE_SIZE);
 __global__ void mlp_backward_weight(float *g_weight, float *g_bias, const float *g_out, const float *input, int batch_size, int seq_len, int input_dim, int output_dim) {
     __shared__ float s_input[TILE_SIZE][TILE_SIZE];
     __shared__ float s_g_out[TILE_SIZE][TILE_SIZE];
     
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
+    int tx = threadIdx.x % TILE_SIZE;
+    int ty = threadIdx.x / TILE_SIZE;
     
     int out_col = blockIdx.x * TILE_SIZE + tx;  // output_dim
     int out_row = blockIdx.y * TILE_SIZE + ty;  // input_dim

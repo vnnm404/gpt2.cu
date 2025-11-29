@@ -20,7 +20,7 @@
     dim3(((output_dim) + MLP_TILE_SIZE - 1) / MLP_TILE_SIZE, \
          ((input_dim) + MLP_TILE_SIZE - 1) / MLP_TILE_SIZE)
 
-#define MLP_BLOCK_DIM dim3(MLP_TILE_SIZE, MLP_TILE_SIZE)
+#define MLP_BLOCK_DIM dim3(MLP_TILE_SIZE * MLP_TILE_SIZE)
 
 __global__ void mlp_forward(float *out, const float *input, const float *w, const float *b, int batch_size, int seq_len, int input_dim, int output_dim);
 
