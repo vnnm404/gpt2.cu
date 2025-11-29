@@ -7,46 +7,41 @@
 
 #define CHUNK_SIZE 256
 
-tensor_t *tensor_alloc(int ndim, const int *shape) {
-    tensor_t *tensor = (tensor_t *)malloc(sizeof(tensor_t));
-    if (tensor == NULL) {
-        return NULL;
-    }
-
-    tensor->ndim = ndim;
-    tensor->shape = (int *)malloc(ndim * sizeof(int));
-    if (tensor->shape == NULL) {
-        free(tensor);
-        return NULL;
-    }
+tensor_t tensor_alloc(int ndim, const int *shape) {
+    tensor_t tensor;
+    tensor.ndim = ndim;
+    tensor.data = NULL;
 
     int size = 1;
     for (int i = 0; i < ndim; i++) {
-        tensor->shape[i] = shape[i];
+        tensor.shape[i] = shape[i];
         size *= shape[i];
+    }
+    
+    // Initialize unused shape dimensions to 0
+    for (int i = ndim; i < 4; i++) {
+        tensor.shape[i] = 0;
     }
 
     // Allocate data on GPU using CUDA
-    cudaError_t err = cudaMalloc(&tensor->data, size * sizeof(float));
+    cudaError_t err = cudaMalloc(&tensor.data, size * sizeof(float));
     if (err != cudaSuccess) {
-        free(tensor->shape);
-        free(tensor);
-        return NULL;
+        tensor.data = NULL;
     }
 
     return tensor;
 }
 
-int tensor_size(const tensor_t *tensor) {
+int tensor_size(const tensor_t tensor) {
     int size = 1;
-    for (int i = 0; i < tensor->ndim; i++) {
-        size *= tensor->shape[i];
+    for (int i = 0; i < tensor.ndim; i++) {
+        size *= tensor.shape[i];
     }
     return size;
 }
 
 int tensor_load(tensor_t *tensor, FILE *file) {
-    int size = tensor_size(tensor);
+    int size = tensor_size(*tensor);
     float buffer[CHUNK_SIZE]; // Stack buffer for chunked reading
     int remaining = size;
     int offset = 0;
@@ -76,9 +71,6 @@ int tensor_load(tensor_t *tensor, FILE *file) {
 void tensor_free(tensor_t *tensor) {
     if (tensor->data) {
         cudaFree(tensor->data);
+        tensor->data = NULL;
     }
-    if (tensor->shape) {
-        free(tensor->shape);
-    }
-    free(tensor);
 }

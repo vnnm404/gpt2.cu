@@ -51,34 +51,34 @@ gpt2_t g_model;  // model weight gradients
 // Training buffer structures (same as train.cu)
 typedef struct
 {
-    tensor_t *ln_1;
-    tensor_t *ln_1_mean;
-    tensor_t *ln_1_rstd;
-    tensor_t *qkv;
-    tensor_t *atty;
-    tensor_t *preatt;
-    tensor_t *att;
-    tensor_t *att_proj;
-    tensor_t *res_2;
-    tensor_t *ln_2;
-    tensor_t *ln_2_mean;
-    tensor_t *ln_2_rstd;
-    tensor_t *mlp_fc;
-    tensor_t *mlp_fc_gelu;
-    tensor_t *mlp_proj;
-    tensor_t *res_3;
+    tensor_t ln_1;
+    tensor_t ln_1_mean;
+    tensor_t ln_1_rstd;
+    tensor_t qkv;
+    tensor_t atty;
+    tensor_t preatt;
+    tensor_t att;
+    tensor_t att_proj;
+    tensor_t res_2;
+    tensor_t ln_2;
+    tensor_t ln_2_mean;
+    tensor_t ln_2_rstd;
+    tensor_t mlp_fc;
+    tensor_t mlp_fc_gelu;
+    tensor_t mlp_proj;
+    tensor_t res_3;
 } layer_buffers_t;
 
 typedef struct
 {
-    tensor_t *encoded;
+    tensor_t encoded;
     layer_buffers_t blocks[NUM_LAYERS];
-    tensor_t *ln_f;
-    tensor_t *ln_f_mean;
-    tensor_t *ln_f_rstd;
-    tensor_t *logits;
-    tensor_t *probs;
-    tensor_t *losses;
+    tensor_t ln_f;
+    tensor_t ln_f_mean;
+    tensor_t ln_f_rstd;
+    tensor_t logits;
+    tensor_t probs;
+    tensor_t losses;
 } train_buffers_t;
 
 train_buffers_t buffers;
@@ -274,7 +274,7 @@ int main(int argc, char *argv[]) {
         
         // Compute loss
         cross_entropy(d_target_tokens, T);
-        float mean_loss = compute_mean_loss(buffers.losses, B, T);
+        float mean_loss = compute_mean_loss(&buffers.losses, B, T);
         
         // Zero gradients
         gpt2_zero_grad(&g_model);
@@ -353,7 +353,7 @@ int setup_train_buffers(train_buffers_t *buffers, int seq_len)
         layer_buffers_t *layer_bufs = &buffers->blocks[i];
 
         int ln1_shape[3] = {B, S, h};
-        int ln1_mean_shape[2] = {B, h};
+        int ln1_mean_shape[2] = {B, S};
         int qkv_shape[3] = {B, S, 3 * h};
         int atty_shape[3] = {B, S, h};
         int preatt_shape[4] = {B, n_head, S, S};
@@ -361,7 +361,7 @@ int setup_train_buffers(train_buffers_t *buffers, int seq_len)
         int att_proj_shape[3] = {B, S, h};
         int res_shape[3] = {B, S, h};
         int ln2_shape[3] = {B, S, h};
-        int ln2_mean_shape[2] = {B, h};
+        int ln2_mean_shape[2] = {B, S};
         int mlp_fc_shape[3] = {B, S, four_h};
         int mlp_fc_gelu_shape[3] = {B, S, four_h};
         int mlp_proj_shape[3] = {B, S, h};
@@ -385,7 +385,7 @@ int setup_train_buffers(train_buffers_t *buffers, int seq_len)
     }
 
     int ln_f_shape[3] = {B, S, h};
-    int ln_f_mean_shape[2] = {B, h};
+    int ln_f_mean_shape[2] = {B, S};
     int logits_shape[3] = {B, S, V};
     int probs_shape[3] = {B, S, V};
     int losses_shape[2] = {B, S};
@@ -402,33 +402,33 @@ int setup_train_buffers(train_buffers_t *buffers, int seq_len)
 
 void free_train_buffers(train_buffers_t *buffers)
 {
-    tensor_free(buffers->encoded);
+    tensor_free(&buffers->encoded);
     for (int i = 0; i < config.n_layer; i++) {
         layer_buffers_t *layer_bufs = &buffers->blocks[i];
 
-        tensor_free(layer_bufs->ln_1);
-        tensor_free(layer_bufs->ln_1_mean);
-        tensor_free(layer_bufs->ln_1_rstd);
-        tensor_free(layer_bufs->qkv);
-        tensor_free(layer_bufs->atty);
-        tensor_free(layer_bufs->preatt);
-        tensor_free(layer_bufs->att);
-        tensor_free(layer_bufs->att_proj);
-        tensor_free(layer_bufs->res_2);
-        tensor_free(layer_bufs->ln_2);
-        tensor_free(layer_bufs->ln_2_mean);
-        tensor_free(layer_bufs->ln_2_rstd);
-        tensor_free(layer_bufs->mlp_fc);
-        tensor_free(layer_bufs->mlp_fc_gelu);
-        tensor_free(layer_bufs->mlp_proj);
-        tensor_free(layer_bufs->res_3);
+        tensor_free(&layer_bufs->ln_1);
+        tensor_free(&layer_bufs->ln_1_mean);
+        tensor_free(&layer_bufs->ln_1_rstd);
+        tensor_free(&layer_bufs->qkv);
+        tensor_free(&layer_bufs->atty);
+        tensor_free(&layer_bufs->preatt);
+        tensor_free(&layer_bufs->att);
+        tensor_free(&layer_bufs->att_proj);
+        tensor_free(&layer_bufs->res_2);
+        tensor_free(&layer_bufs->ln_2);
+        tensor_free(&layer_bufs->ln_2_mean);
+        tensor_free(&layer_bufs->ln_2_rstd);
+        tensor_free(&layer_bufs->mlp_fc);
+        tensor_free(&layer_bufs->mlp_fc_gelu);
+        tensor_free(&layer_bufs->mlp_proj);
+        tensor_free(&layer_bufs->res_3);
     }
-    tensor_free(buffers->ln_f);
-    tensor_free(buffers->ln_f_mean);
-    tensor_free(buffers->ln_f_rstd);
-    tensor_free(buffers->logits);
-    tensor_free(buffers->probs);
-    tensor_free(buffers->losses);
+    tensor_free(&buffers->ln_f);
+    tensor_free(&buffers->ln_f_mean);
+    tensor_free(&buffers->ln_f_rstd);
+    tensor_free(&buffers->logits);
+    tensor_free(&buffers->probs);
+    tensor_free(&buffers->losses);
 }
 
 void forward(const int *d_input_tokens, int seq_len)
@@ -442,40 +442,40 @@ void forward(const int *d_input_tokens, int seq_len)
 
     int thr = 256;
 
-    embedding_forward<<<B, thr>>>(buffers.encoded->data, d_input_tokens, model.emb.wte->data, model.emb.wpe->data, S, h, V, config.n_positions);
+    embedding_forward<<<B, thr>>>(buffers.encoded.data, d_input_tokens, model.emb.wte.data, model.emb.wpe.data, S, h, V, config.n_positions);
 
     for (int layer_idx = 0; layer_idx < config.n_layer; layer_idx++)
     {
         block_t *block = &model.h[layer_idx];
         layer_buffers_t *layer_bufs = &buffers.blocks[layer_idx];
 
-        tensor_t *res = (layer_idx == 0) ? buffers.encoded : buffers.blocks[layer_idx - 1].res_3;
+        tensor_t res = (layer_idx == 0) ? buffers.encoded : buffers.blocks[layer_idx - 1].res_3;
 
-        layernorm_forward<<<B, thr>>>(layer_bufs->ln_1->data, res->data, block->ln_1.w->data, block->ln_1.b->data, layer_bufs->ln_1_mean->data, layer_bufs->ln_1_rstd->data, S, h);
+        layernorm_forward<<<B, thr>>>(layer_bufs->ln_1.data, res.data, block->ln_1.w.data, block->ln_1.b.data, layer_bufs->ln_1_mean.data, layer_bufs->ln_1_rstd.data, S, h);
 
-        mlp_forward<<<MLP_FORWARD_GRID(h * 3, B, S), MLP_BLOCK_DIM>>>(layer_bufs->qkv->data, layer_bufs->ln_1->data, block->attn.qkv_w->data, block->attn.qkv_b->data, B, S, h, h * 3);
+        mlp_forward<<<MLP_FORWARD_GRID(h * 3, B, S), MLP_BLOCK_DIM>>>(layer_bufs->qkv.data, layer_bufs->ln_1.data, block->attn.qkv_w.data, block->attn.qkv_b.data, B, S, h, h * 3);
 
-        attention_forward<<<CEIL_DIV(B * S * n_head, thr), thr>>>(layer_bufs->atty->data, layer_bufs->preatt->data, layer_bufs->att->data, layer_bufs->qkv->data, B, S, n_head, h);
+        attention_forward<<<CEIL_DIV(B * S * n_head, thr), thr>>>(layer_bufs->atty.data, layer_bufs->preatt.data, layer_bufs->att.data, layer_bufs->qkv.data, B, S, n_head, h);
 
-        mlp_forward<<<MLP_FORWARD_GRID(h, B, S), MLP_BLOCK_DIM>>>(layer_bufs->att_proj->data, layer_bufs->atty->data, block->attn.proj_w->data, block->attn.proj_b->data, B, S, h, h);
-        residual_forward<<<CEIL_DIV(B * S * h, thr), thr>>>(layer_bufs->res_2->data, layer_bufs->att_proj->data, res->data, B, S, h);
+        mlp_forward<<<MLP_FORWARD_GRID(h, B, S), MLP_BLOCK_DIM>>>(layer_bufs->att_proj.data, layer_bufs->atty.data, block->attn.proj_w.data, block->attn.proj_b.data, B, S, h, h);
+        residual_forward<<<CEIL_DIV(B * S * h, thr), thr>>>(layer_bufs->res_2.data, layer_bufs->att_proj.data, res.data, B, S, h);
 
-        layernorm_forward<<<B, thr>>>(layer_bufs->ln_2->data, layer_bufs->res_2->data, block->ln_2.w->data, block->ln_2.b->data, layer_bufs->ln_2_mean->data, layer_bufs->ln_2_rstd->data, S, h);
+        layernorm_forward<<<B, thr>>>(layer_bufs->ln_2.data, layer_bufs->res_2.data, block->ln_2.w.data, block->ln_2.b.data, layer_bufs->ln_2_mean.data, layer_bufs->ln_2_rstd.data, S, h);
 
-        mlp_forward<<<MLP_FORWARD_GRID(h * 4, B, S), MLP_BLOCK_DIM>>>(layer_bufs->mlp_fc->data, layer_bufs->ln_2->data, block->mlp.fc_w->data, block->mlp.fc_b->data, B, S, h, h * 4);
+        mlp_forward<<<MLP_FORWARD_GRID(h * 4, B, S), MLP_BLOCK_DIM>>>(layer_bufs->mlp_fc.data, layer_bufs->ln_2.data, block->mlp.fc_w.data, block->mlp.fc_b.data, B, S, h, h * 4);
 
-        gelu_forward<<<CEIL_DIV(B * S * 4 * h, thr), thr>>>(layer_bufs->mlp_fc_gelu->data, layer_bufs->mlp_fc->data, B, S, h * 4);
+        gelu_forward<<<CEIL_DIV(B * S * 4 * h, thr), thr>>>(layer_bufs->mlp_fc_gelu.data, layer_bufs->mlp_fc.data, B, S, h * 4);
 
-        mlp_forward<<<MLP_FORWARD_GRID(h, B, S), MLP_BLOCK_DIM>>>(layer_bufs->mlp_proj->data, layer_bufs->mlp_fc_gelu->data, block->mlp.proj_w->data, block->mlp.proj_b->data, B, S, h * 4, h);
-        residual_forward<<<CEIL_DIV(B * S * h, thr), thr>>>(layer_bufs->res_3->data, layer_bufs->mlp_proj->data, layer_bufs->res_2->data, B, S, h);
+        mlp_forward<<<MLP_FORWARD_GRID(h, B, S), MLP_BLOCK_DIM>>>(layer_bufs->mlp_proj.data, layer_bufs->mlp_fc_gelu.data, block->mlp.proj_w.data, block->mlp.proj_b.data, B, S, h * 4, h);
+        residual_forward<<<CEIL_DIV(B * S * h, thr), thr>>>(layer_bufs->res_3.data, layer_bufs->mlp_proj.data, layer_bufs->res_2.data, B, S, h);
     }
 
-    tensor_t *res = buffers.blocks[L - 1].res_3;
-    layernorm_forward<<<B, thr>>>(buffers.ln_f->data, res->data, model.ln_f.w->data, model.ln_f.b->data, buffers.ln_f_mean->data, buffers.ln_f_rstd->data, S, h);
+    tensor_t res = buffers.blocks[L - 1].res_3;
+    layernorm_forward<<<B, thr>>>(buffers.ln_f.data, res.data, model.ln_f.w.data, model.ln_f.b.data, buffers.ln_f_mean.data, buffers.ln_f_rstd.data, S, h);
 
-    mlp_forward<<<MLP_FORWARD_GRID(V, B, S), MLP_BLOCK_DIM>>>(buffers.logits->data, buffers.ln_f->data, model.emb.wte->data, NULL, B, S, h, V);
+    mlp_forward<<<MLP_FORWARD_GRID(V, B, S), MLP_BLOCK_DIM>>>(buffers.logits.data, buffers.ln_f.data, model.emb.wte.data, NULL, B, S, h, V);
 
-    softmax_forward<<<CEIL_DIV(B * S * V, thr), thr>>>(buffers.probs->data, buffers.logits->data, B, S, V);
+    softmax_forward<<<CEIL_DIV(B * S * V, thr), thr>>>(buffers.probs.data, buffers.logits.data, B, S, V);
 }
 
 void cross_entropy(const int *d_target_tokens, int seq_len) {
@@ -484,7 +484,7 @@ void cross_entropy(const int *d_target_tokens, int seq_len) {
     int V = config.vocab_size;
 
     int thr = 256;
-    cross_entropy_forward<<<CEIL_DIV(B * S, thr), thr>>>(buffers.losses->data, buffers.probs->data, d_target_tokens, B, S, V);
+    cross_entropy_forward<<<CEIL_DIV(B * S, thr), thr>>>(buffers.losses.data, buffers.probs.data, d_target_tokens, B, S, V);
 }
 
 void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len) {
@@ -497,16 +497,16 @@ void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len
 
     int thr = 256;
 
-    cross_entropy_backward_init<<<CEIL_DIV(B * S, thr), thr>>>(g_buffers.losses->data, B, S);
-    cross_entropy_backward<<<CEIL_DIV(B * S * V, thr), thr>>>(g_buffers.logits->data, g_buffers.losses->data, buffers.probs->data, d_target_tokens, B, S, V);
+    cross_entropy_backward_init<<<CEIL_DIV(B * S, thr), thr>>>(g_buffers.losses.data, B, S);
+    cross_entropy_backward<<<CEIL_DIV(B * S * V, thr), thr>>>(g_buffers.logits.data, g_buffers.losses.data, buffers.probs.data, d_target_tokens, B, S, V);
 
-    mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_buffers.ln_f->data, g_buffers.logits->data, model.emb.wte->data, B, S, h, V);
-    mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(V, h), MLP_BLOCK_DIM>>>(g_model.emb.wte->data, NULL, g_buffers.logits->data, buffers.ln_f->data, B, S, h, V);
+    mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_buffers.ln_f.data, g_buffers.logits.data, model.emb.wte.data, B, S, h, V);
+    mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(V, h), MLP_BLOCK_DIM>>>(g_model.emb.wte.data, NULL, g_buffers.logits.data, buffers.ln_f.data, B, S, h, V);
 
-    tensor_t *res = buffers.blocks[L - 1].res_3;
-    tensor_t *g_res = g_buffers.blocks[L - 1].res_3;
+    tensor_t res = buffers.blocks[L - 1].res_3;
+    tensor_t g_res = g_buffers.blocks[L - 1].res_3;
 
-    layernorm_backward<<<B, thr>>>(g_res->data, g_model.ln_f.w->data, g_model.ln_f.b->data, g_buffers.ln_f->data, res->data, model.ln_f.w->data, buffers.ln_f_mean->data, buffers.ln_f_rstd->data, B, S, h);
+    layernorm_backward<<<B, thr>>>(g_res.data, g_model.ln_f.w.data, g_model.ln_f.b.data, g_buffers.ln_f.data, res.data, model.ln_f.w.data, buffers.ln_f_mean.data, buffers.ln_f_rstd.data, B, S, h);
 
     for (int layer_idx = L - 1; layer_idx >= 0; layer_idx--)
     {
@@ -515,35 +515,35 @@ void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len
         layer_buffers_t *layer_bufs = &buffers.blocks[layer_idx];
         layer_buffers_t *g_layer_bufs = &g_buffers.blocks[layer_idx];
 
-        tensor_t *res = (layer_idx == 0) ? buffers.encoded : buffers.blocks[layer_idx - 1].res_3;
-        tensor_t *g_res = (layer_idx == 0) ? g_buffers.encoded : g_buffers.blocks[layer_idx - 1].res_3;
+        tensor_t res = (layer_idx == 0) ? buffers.encoded : buffers.blocks[layer_idx - 1].res_3;
+        tensor_t g_res = (layer_idx == 0) ? g_buffers.encoded : g_buffers.blocks[layer_idx - 1].res_3;
 
-        residual_backward<<<CEIL_DIV(B * S * h, thr), thr>>>(g_layer_bufs->res_2->data, g_layer_bufs->mlp_proj->data, g_layer_bufs->res_3->data, B * S * h);
+        residual_backward<<<CEIL_DIV(B * S * h, thr), thr>>>(g_layer_bufs->res_2.data, g_layer_bufs->mlp_proj.data, g_layer_bufs->res_3.data, B * S * h);
 
-        mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h * 4, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs->mlp_fc_gelu->data, g_layer_bufs->mlp_proj->data, block->mlp.proj_w->data, B, S, h * 4, h);
-        mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h, h * 4), MLP_BLOCK_DIM>>>(g_block->mlp.proj_w->data, g_block->mlp.proj_b->data, g_layer_bufs->mlp_proj->data, layer_bufs->mlp_fc_gelu->data, B, S, h * 4, h);
+        mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h * 4, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs->mlp_fc_gelu.data, g_layer_bufs->mlp_proj.data, block->mlp.proj_w.data, B, S, h * 4, h);
+        mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h, h * 4), MLP_BLOCK_DIM>>>(g_block->mlp.proj_w.data, g_block->mlp.proj_b.data, g_layer_bufs->mlp_proj.data, layer_bufs->mlp_fc_gelu.data, B, S, h * 4, h);
 
-        gelu_backward<<<CEIL_DIV(B * S * 4 * h, thr), thr>>>(g_layer_bufs->mlp_fc->data, layer_bufs->mlp_fc->data, g_layer_bufs->mlp_fc_gelu->data, B * S * 4 * h);
+        gelu_backward<<<CEIL_DIV(B * S * 4 * h, thr), thr>>>(g_layer_bufs->mlp_fc.data, layer_bufs->mlp_fc.data, g_layer_bufs->mlp_fc_gelu.data, B * S * 4 * h);
 
-        mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs->ln_2->data, g_layer_bufs->mlp_fc->data, block->mlp.fc_w->data, B, S, h, h * 4);
-        mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h * 4, h), MLP_BLOCK_DIM>>>(g_block->mlp.fc_w->data, g_block->mlp.fc_b->data, g_layer_bufs->mlp_fc->data, layer_bufs->ln_2->data, B, S, h, h * 4);
+        mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs->ln_2.data, g_layer_bufs->mlp_fc.data, block->mlp.fc_w.data, B, S, h, h * 4);
+        mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h * 4, h), MLP_BLOCK_DIM>>>(g_block->mlp.fc_w.data, g_block->mlp.fc_b.data, g_layer_bufs->mlp_fc.data, layer_bufs->ln_2.data, B, S, h, h * 4);
 
-        layernorm_backward<<<B, thr>>>(g_layer_bufs->res_2->data, g_block->ln_2.w->data, g_block->ln_2.b->data, g_layer_bufs->ln_2->data, layer_bufs->res_2->data, block->ln_2.w->data, layer_bufs->ln_2_mean->data, layer_bufs->ln_2_rstd->data, B, S, h);
+        layernorm_backward<<<B, thr>>>(g_layer_bufs->res_2.data, g_block->ln_2.w.data, g_block->ln_2.b.data, g_layer_bufs->ln_2.data, layer_bufs->res_2.data, block->ln_2.w.data, layer_bufs->ln_2_mean.data, layer_bufs->ln_2_rstd.data, B, S, h);
 
-        residual_backward<<<CEIL_DIV(B * S * h, thr), thr>>>(g_res->data, g_layer_bufs->att_proj->data, g_layer_bufs->res_2->data, B * S * h);
+        residual_backward<<<CEIL_DIV(B * S * h, thr), thr>>>(g_res.data, g_layer_bufs->att_proj.data, g_layer_bufs->res_2.data, B * S * h);
 
-        mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs->atty->data, g_layer_bufs->att_proj->data, block->attn.proj_w->data, B, S, h, h);
-        mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h, h), MLP_BLOCK_DIM>>>(g_block->attn.proj_w->data, g_block->attn.proj_b->data, g_layer_bufs->att_proj->data, layer_bufs->atty->data, B, S, h, h);
+        mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs->atty.data, g_layer_bufs->att_proj.data, block->attn.proj_w.data, B, S, h, h);
+        mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h, h), MLP_BLOCK_DIM>>>(g_block->attn.proj_w.data, g_block->attn.proj_b.data, g_layer_bufs->att_proj.data, layer_bufs->atty.data, B, S, h, h);
 
-        attention_backward<<<CEIL_DIV(B * S * n_head, thr), thr>>>(g_layer_bufs->qkv->data, g_layer_bufs->preatt->data, g_layer_bufs->att->data, g_layer_bufs->atty->data, layer_bufs->qkv->data, layer_bufs->att->data, B, S, h, n_head);
+        attention_backward<<<CEIL_DIV(B * S * n_head, thr), thr>>>(g_layer_bufs->qkv.data, g_layer_bufs->preatt.data, g_layer_bufs->att.data, g_layer_bufs->atty.data, layer_bufs->qkv.data, layer_bufs->att.data, B, S, h, n_head);
 
-        mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs->ln_1->data, g_layer_bufs->qkv->data, block->attn.qkv_w->data, B, S, h, h * 3);
-        mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h * 3, h), MLP_BLOCK_DIM>>>(g_block->attn.qkv_w->data, g_block->attn.qkv_b->data, g_layer_bufs->qkv->data, layer_bufs->ln_1->data, B, S, h, h * 3);
+        mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs->ln_1.data, g_layer_bufs->qkv.data, block->attn.qkv_w.data, B, S, h, h * 3);
+        mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h * 3, h), MLP_BLOCK_DIM>>>(g_block->attn.qkv_w.data, g_block->attn.qkv_b.data, g_layer_bufs->qkv.data, layer_bufs->ln_1.data, B, S, h, h * 3);
 
-        layernorm_backward<<<B, thr>>>(g_res->data, g_block->ln_1.w->data, g_block->ln_1.b->data, g_layer_bufs->ln_1->data, res->data, block->ln_1.w->data, layer_bufs->ln_1_mean->data, layer_bufs->ln_1_rstd->data, B, S, h);
+        layernorm_backward<<<B, thr>>>(g_res.data, g_block->ln_1.w.data, g_block->ln_1.b.data, g_layer_bufs->ln_1.data, res.data, block->ln_1.w.data, layer_bufs->ln_1_mean.data, layer_bufs->ln_1_rstd.data, B, S, h);
     }
 
-    embedding_backward<<<CEIL_DIV(B * S, thr), thr>>>(g_model.emb.wte->data, g_model.emb.wpe->data, g_buffers.encoded->data, d_input_tokens, B, S, h);
+    embedding_backward<<<CEIL_DIV(B * S, thr), thr>>>(g_model.emb.wte.data, g_model.emb.wpe.data, g_buffers.encoded.data, d_input_tokens, B, S, h);
 }
 
 void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt) {
@@ -583,33 +583,33 @@ void gpt2_zero_grad(gpt2_t *grads) {
 }
 
 void zero_activation_grads(train_buffers_t *g_buffers) {
-    cudaMemset(g_buffers->encoded->data, 0, tensor_size(g_buffers->encoded) * sizeof(float));
+    cudaMemset(g_buffers->encoded.data, 0, tensor_size(g_buffers->encoded) * sizeof(float));
     
     for (int i = 0; i < config.n_layer; i++) {
         layer_buffers_t *g_layer = &g_buffers->blocks[i];
         
-        cudaMemset(g_layer->ln_1->data, 0, tensor_size(g_layer->ln_1) * sizeof(float));
-        cudaMemset(g_layer->ln_1_mean->data, 0, tensor_size(g_layer->ln_1_mean) * sizeof(float));
-        cudaMemset(g_layer->ln_1_rstd->data, 0, tensor_size(g_layer->ln_1_rstd) * sizeof(float));
-        cudaMemset(g_layer->qkv->data, 0, tensor_size(g_layer->qkv) * sizeof(float));
-        cudaMemset(g_layer->atty->data, 0, tensor_size(g_layer->atty) * sizeof(float));
-        cudaMemset(g_layer->preatt->data, 0, tensor_size(g_layer->preatt) * sizeof(float));
-        cudaMemset(g_layer->att->data, 0, tensor_size(g_layer->att) * sizeof(float));
-        cudaMemset(g_layer->att_proj->data, 0, tensor_size(g_layer->att_proj) * sizeof(float));
-        cudaMemset(g_layer->res_2->data, 0, tensor_size(g_layer->res_2) * sizeof(float));
-        cudaMemset(g_layer->ln_2->data, 0, tensor_size(g_layer->ln_2) * sizeof(float));
-        cudaMemset(g_layer->ln_2_mean->data, 0, tensor_size(g_layer->ln_2_mean) * sizeof(float));
-        cudaMemset(g_layer->ln_2_rstd->data, 0, tensor_size(g_layer->ln_2_rstd) * sizeof(float));
-        cudaMemset(g_layer->mlp_fc->data, 0, tensor_size(g_layer->mlp_fc) * sizeof(float));
-        cudaMemset(g_layer->mlp_fc_gelu->data, 0, tensor_size(g_layer->mlp_fc_gelu) * sizeof(float));
-        cudaMemset(g_layer->mlp_proj->data, 0, tensor_size(g_layer->mlp_proj) * sizeof(float));
-        cudaMemset(g_layer->res_3->data, 0, tensor_size(g_layer->res_3) * sizeof(float));
+        cudaMemset(g_layer->ln_1.data, 0, tensor_size(g_layer->ln_1) * sizeof(float));
+        cudaMemset(g_layer->ln_1_mean.data, 0, tensor_size(g_layer->ln_1_mean) * sizeof(float));
+        cudaMemset(g_layer->ln_1_rstd.data, 0, tensor_size(g_layer->ln_1_rstd) * sizeof(float));
+        cudaMemset(g_layer->qkv.data, 0, tensor_size(g_layer->qkv) * sizeof(float));
+        cudaMemset(g_layer->atty.data, 0, tensor_size(g_layer->atty) * sizeof(float));
+        cudaMemset(g_layer->preatt.data, 0, tensor_size(g_layer->preatt) * sizeof(float));
+        cudaMemset(g_layer->att.data, 0, tensor_size(g_layer->att) * sizeof(float));
+        cudaMemset(g_layer->att_proj.data, 0, tensor_size(g_layer->att_proj) * sizeof(float));
+        cudaMemset(g_layer->res_2.data, 0, tensor_size(g_layer->res_2) * sizeof(float));
+        cudaMemset(g_layer->ln_2.data, 0, tensor_size(g_layer->ln_2) * sizeof(float));
+        cudaMemset(g_layer->ln_2_mean.data, 0, tensor_size(g_layer->ln_2_mean) * sizeof(float));
+        cudaMemset(g_layer->ln_2_rstd.data, 0, tensor_size(g_layer->ln_2_rstd) * sizeof(float));
+        cudaMemset(g_layer->mlp_fc.data, 0, tensor_size(g_layer->mlp_fc) * sizeof(float));
+        cudaMemset(g_layer->mlp_fc_gelu.data, 0, tensor_size(g_layer->mlp_fc_gelu) * sizeof(float));
+        cudaMemset(g_layer->mlp_proj.data, 0, tensor_size(g_layer->mlp_proj) * sizeof(float));
+        cudaMemset(g_layer->res_3.data, 0, tensor_size(g_layer->res_3) * sizeof(float));
     }
     
-    cudaMemset(g_buffers->ln_f->data, 0, tensor_size(g_buffers->ln_f) * sizeof(float));
-    cudaMemset(g_buffers->ln_f_mean->data, 0, tensor_size(g_buffers->ln_f_mean) * sizeof(float));
-    cudaMemset(g_buffers->ln_f_rstd->data, 0, tensor_size(g_buffers->ln_f_rstd) * sizeof(float));
-    cudaMemset(g_buffers->logits->data, 0, tensor_size(g_buffers->logits) * sizeof(float));
-    cudaMemset(g_buffers->probs->data, 0, tensor_size(g_buffers->probs) * sizeof(float));
-    cudaMemset(g_buffers->losses->data, 0, tensor_size(g_buffers->losses) * sizeof(float));
+    cudaMemset(g_buffers->ln_f.data, 0, tensor_size(g_buffers->ln_f) * sizeof(float));
+    cudaMemset(g_buffers->ln_f_mean.data, 0, tensor_size(g_buffers->ln_f_mean) * sizeof(float));
+    cudaMemset(g_buffers->ln_f_rstd.data, 0, tensor_size(g_buffers->ln_f_rstd) * sizeof(float));
+    cudaMemset(g_buffers->logits.data, 0, tensor_size(g_buffers->logits) * sizeof(float));
+    cudaMemset(g_buffers->probs.data, 0, tensor_size(g_buffers->probs) * sizeof(float));
+    cudaMemset(g_buffers->losses.data, 0, tensor_size(g_buffers->losses) * sizeof(float));
 }

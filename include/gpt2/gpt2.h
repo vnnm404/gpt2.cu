@@ -28,30 +28,30 @@ typedef struct
 
 typedef struct
 {
-    tensor_t *wte; // (h, V)
-    tensor_t *wpe; // (maxT, h)
+    tensor_t wte; // (h, V)
+    tensor_t wpe; // (maxT, h)
 } emb_t;
 
 typedef struct
 {
-    tensor_t *w; // (h)
-    tensor_t *b; // (h)
+    tensor_t w; // (h)
+    tensor_t b; // (h)
 } ln_t;
 
 typedef struct
 {
-    tensor_t *qkv_w;  // (h, 3*h)
-    tensor_t *qkv_b;  // (3*h)
-    tensor_t *proj_w; // (h, h)
-    tensor_t *proj_b; // (h)
+    tensor_t qkv_w;  // (h, 3*h)
+    tensor_t qkv_b;  // (3*h)
+    tensor_t proj_w; // (h, h)
+    tensor_t proj_b; // (h)
 } attn_t;
 
 typedef struct
 {
-    tensor_t *fc_w;   // (h, 4*h)
-    tensor_t *fc_b;   // (4*h)
-    tensor_t *proj_w; // (4*h, h)
-    tensor_t *proj_b; // (h)
+    tensor_t fc_w;   // (h, 4*h)
+    tensor_t fc_b;   // (4*h)
+    tensor_t proj_w; // (4*h, h)
+    tensor_t proj_b; // (h)
 } ffn_t;
 
 typedef struct
