@@ -1601,7 +1601,7 @@ stream_t** schedule_instructions(int seq_len) {
     // OP 34: Embedding backward - [CEIL_DIV(B * S, thr) blocks, 1D grid]
     {
         int op = 34;
-        int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1) * 14) + 12;
+        int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1) * 14) + 13;
         int expected = B;
         int num_blocks = CEIL_DIV(B * S, thr);
 
