@@ -289,7 +289,7 @@ int main()
     gpuErrchk(cudaMemcpy(d_g_buffers, &g_buffers, sizeof(train_buffers_t), cudaMemcpyHostToDevice));
 
     // allocate global bar
-    int bar_size = config.batch_size * (1 + (config.n_layer * 10 + 3) + 1 + (5 + config.n_layer * 13 + 1));
+    int bar_size = config.batch_size * (1 + (config.n_layer * 10 + 3) + 1 + (5 + config.n_layer * 14 + 1));
     gpuErrchk(cudaMalloc(&bar, bar_size * sizeof(int)));
     gpuErrchk(cudaMemset(bar, 0, bar_size * sizeof(int)));
 
@@ -634,74 +634,74 @@ void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len
         tensor_t g_res = (layer_idx == 0) ? g_buffers.encoded : g_buffers.blocks[layer_idx - 1].res_3;
 
         // Backward through residual connection 3: res_3 = mlp_proj + res_2
-        // OP = 20: waits on bar[1 + (layer_idx * 10) + 3 + 4] = B if layer_idx == L - 1 else bar[1 + (L * 10) + 3 + 5 + (layer_idx + 1) * 13 + 12] = B
+        // OP = 20: waits on bar[1 + (layer_idx * 10) + 3 + 4] = B if layer_idx == L - 1 else bar[1 + (L * 10) + 3 + 5 + (layer_idx + 1) * 14 + 13] = B
         residual_backward<<<CEIL_DIV(B * S * h, thr), thr>>>(g_layer_bufs.res_2.data, g_layer_bufs.mlp_proj.data, g_layer_bufs.res_3.data, B * S * h);
         // OP = 20: sets bar[1 + (layer_idx * 10) + 3 + 5 + (layer_idx * 14)] = CEIL_DIV(B * S * h, thr)
 
         // Backward through MLP projection: mlp_proj = mlp_fc_gelu @ proj_w + proj_b
-        // OP = 21: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13)] = CEIL_DIV(B * S * h, thr)
+        // OP = 21: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14)] = CEIL_DIV(B * S * h, thr)
         mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h * 4, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs.mlp_fc_gelu.data, g_layer_bufs.mlp_proj.data, block.mlp.proj_w.data, B, S, h * 4, h);
-        // OP = 21: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 1] = size(MLP_BACKWARD_INPUT_GRID(h * 4, B, S))
+        // OP = 21: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 1] = size(MLP_BACKWARD_INPUT_GRID(h * 4, B, S))
 
-        // OP = 22: MLP projection weight gradient, waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 1] = size(MLP_BACKWARD_INPUT_GRID(h * 4, B, S))
+        // OP = 22: MLP projection weight gradient, waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 1] = size(MLP_BACKWARD_INPUT_GRID(h * 4, B, S))
         mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h, h * 4), MLP_BLOCK_DIM>>>(g_block.mlp.proj_w.data, g_block.mlp.proj_b.data, g_layer_bufs.mlp_proj.data, layer_bufs.mlp_fc_gelu.data, B, S, h * 4, h);
-        // OP = 22: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 2] = size(MLP_BACKWARD_WEIGHT_GRID(h, h * 4))
+        // OP = 22: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 2] = size(MLP_BACKWARD_WEIGHT_GRID(h, h * 4))
 
         // Backward through GELU: mlp_fc_gelu = gelu(mlp_fc)
-        // OP = 23: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 2] = size(MLP_BACKWARD_WEIGHT_GRID(h, h * 4))
+        // OP = 23: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 2] = size(MLP_BACKWARD_WEIGHT_GRID(h, h * 4))
         gelu_backward<<<CEIL_DIV(B * S * 4 * h, thr), thr>>>(g_layer_bufs.mlp_fc.data, layer_bufs.mlp_fc.data, g_layer_bufs.mlp_fc_gelu.data, B * S * 4 * h);
-        // OP = 23: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 3] = CEIL_DIV(B * S * 4 * h, thr)
+        // OP = 23: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 3] = CEIL_DIV(B * S * 4 * h, thr)
 
         // Backward through MLP FC: mlp_fc = ln_2 @ fc_w + fc_b
-        // OP = 24: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 3] = CEIL_DIV(B * S * 4 * h, thr)
+        // OP = 24: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 3] = CEIL_DIV(B * S * 4 * h, thr)
         mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs.ln_2.data, g_layer_bufs.mlp_fc.data, block.mlp.fc_w.data, B, S, h, h * 4);
-        // OP = 24: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 4] = size(MLP_BACKWARD_INPUT_GRID(h, B, S))
+        // OP = 24: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 4] = size(MLP_BACKWARD_INPUT_GRID(h, B, S))
         
-        // OP = 25: MLP FC weight gradient, waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 4] = size(MLP_BACKWARD_INPUT_GRID(h, B, S))
+        // OP = 25: MLP FC weight gradient, waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 4] = size(MLP_BACKWARD_INPUT_GRID(h, B, S))
         mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h * 4, h), MLP_BLOCK_DIM>>>(g_block.mlp.fc_w.data, g_block.mlp.fc_b.data, g_layer_bufs.mlp_fc.data, layer_bufs.ln_2.data, B, S, h, h * 4);
-        // OP = 25: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 5] = size(MLP_BACKWARD_WEIGHT_GRID(h * 4, h))
+        // OP = 25: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 5] = size(MLP_BACKWARD_WEIGHT_GRID(h * 4, h))
 
         // Backward through LayerNorm 2
-        // OP = 26: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 5] = size(MLP_BACKWARD_WEIGHT_GRID(h * 4, h))
+        // OP = 26: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 5] = size(MLP_BACKWARD_WEIGHT_GRID(h * 4, h))
         layernorm_backward<<<B, thr>>>(g_layer_bufs.res_2.data, g_block.ln_2.w.data, g_block.ln_2.b.data, g_layer_bufs.ln_2.data, layer_bufs.res_2.data, block.ln_2.w.data, layer_bufs.ln_2_mean.data, layer_bufs.ln_2_rstd.data, B, S, h);
-        // OP = 26: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 6] = B
+        // OP = 26: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 6] = B
 
         // Backward through residual connection 2: res_2 = att_proj + res
-        // OP = 27: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 6] = B
+        // OP = 27: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 6] = B
         residual_backward<<<CEIL_DIV(B * S * h, thr), thr>>>(g_res.data, g_layer_bufs.att_proj.data, g_layer_bufs.res_2.data, B * S * h);
-        // OP = 27: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 7] = CEIL_DIV(B * S * h, thr)
+        // OP = 27: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 7] = CEIL_DIV(B * S * h, thr)
 
         // Backward through attention projection: att_proj = atty @ proj_w + proj_b
-        // OP = 28: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 7] = CEIL_DIV(B * S * h, thr)
+        // OP = 28: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 7] = CEIL_DIV(B * S * h, thr)
         mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs.atty.data, g_layer_bufs.att_proj.data, block.attn.proj_w.data, B, S, h, h);
-        // OP = 28: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 8] = size(MLP_BACKWARD_INPUT_GRID(h, B, S))
+        // OP = 28: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 8] = size(MLP_BACKWARD_INPUT_GRID(h, B, S))
 
-        // OP = 29: attention projection weight gradient, waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 8] = size(MLP_BACKWARD_INPUT_GRID(h, B, S))
+        // OP = 29: attention projection weight gradient, waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 8] = size(MLP_BACKWARD_INPUT_GRID(h, B, S))
         mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h, h), MLP_BLOCK_DIM>>>(g_block.attn.proj_w.data, g_block.attn.proj_b.data, g_layer_bufs.att_proj.data, layer_bufs.atty.data, B, S, h, h);
-        // OP = 29: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 9] = size(MLP_BACKWARD_WEIGHT_GRID(h, h))
+        // OP = 29: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 9] = size(MLP_BACKWARD_WEIGHT_GRID(h, h))
 
         // Backward through attention
-        // OP = 30: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 9] = size(MLP_BACKWARD_WEIGHT_GRID(h, h))
+        // OP = 30: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 9] = size(MLP_BACKWARD_WEIGHT_GRID(h, h))
         attention_backward<<<CEIL_DIV(B * S * n_head, thr), thr>>>(g_layer_bufs.qkv.data, g_layer_bufs.preatt.data, g_layer_bufs.att.data, g_layer_bufs.atty.data, layer_bufs.qkv.data, layer_bufs.att.data, B, S, h, n_head);
-        // OP = 30: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 10] = CEIL_DIV(B * S * n_head, thr)
+        // OP = 30: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 10] = CEIL_DIV(B * S * n_head, thr)
 
         // Backward through QKV projection: qkv = ln_1 @ qkv_w + qkv_b
-        // OP = 31: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 10] = CEIL_DIV(B * S * n_head, thr)
+        // OP = 31: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 10] = CEIL_DIV(B * S * n_head, thr)
         mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs.ln_1.data, g_layer_bufs.qkv.data, block.attn.qkv_w.data, B, S, h, h * 3);
-        // OP = 31: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 11] = size(MLP_BACKWARD_INPUT_GRID(h, B, S))
+        // OP = 31: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 11] = size(MLP_BACKWARD_INPUT_GRID(h, B, S))
         
-        // OP = 32: QKV weight gradient, waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 11] = size(MLP_BACKWARD_INPUT_GRID(h, B, S))
+        // OP = 32: QKV weight gradient, waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 11] = size(MLP_BACKWARD_INPUT_GRID(h, B, S))
         mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h * 3, h), MLP_BLOCK_DIM>>>(g_block.attn.qkv_w.data, g_block.attn.qkv_b.data, g_layer_bufs.qkv.data, layer_bufs.ln_1.data, B, S, h, h * 3);
-        // OP = 32: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 12] = size(MLP_BACKWARD_WEIGHT_GRID(h * 3, h))
+        // OP = 32: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 12] = size(MLP_BACKWARD_WEIGHT_GRID(h * 3, h))
 
         // Backward through LayerNorm 1
-        // OP = 33: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 12] = size(MLP_BACKWARD_WEIGHT_GRID(h * 3, h))
+        // OP = 33: waits on bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 12] = size(MLP_BACKWARD_WEIGHT_GRID(h * 3, h))
         layernorm_backward<<<B, thr>>>(g_res.data, g_block.ln_1.w.data, g_block.ln_1.b.data, g_layer_bufs.ln_1.data, res.data, block.ln_1.w.data, layer_bufs.ln_1_mean.data, layer_bufs.ln_1_rstd.data, B, S, h);
-        // OP = 33: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 12] = B
+            // OP = 33: sets bar[1 + (layer_idx * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 13] = B
     }
 
     // Backward through embedding layer
-    // OP = 34: waits on bar[1 + (L * 10) + 3 + 5 + (L * 13) + 12] = B
+    // OP = 34: waits on bar[1 + (L * 10) + 3 + 5 + (L * 14) + 13] = B
     embedding_backward<<<CEIL_DIV(B * S, thr), thr>>>(g_model.emb.wte.data, g_model.emb.wpe.data, g_buffers.encoded.data, d_input_tokens, B, S, h);
 }
 
@@ -1266,7 +1266,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 20: Residual backward (res_3) - [CEIL_DIV(B * S * h, thr) blocks, 1D grid]
         {
             int op = 20;
-            int bar_idx = (layer_idx == L - 1) ? (1 + (L * 10) + 3 + 4) : (1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) - 1) * 13 + 12);
+            int bar_idx = (layer_idx == L - 1) ? (1 + (L * 10) + 3 + 4) : (1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) - 1) * 14 + 13);
             int expected = B;
             int num_blocks = CEIL_DIV(B * S * h, thr);
 
@@ -1287,7 +1287,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 21: MLP projection backward input - [MLP_BACKWARD_INPUT_GRID(h * 4, B, S) blocks, 2D grid]
         {
             int op = 21;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13);
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14);
             int expected = CEIL_DIV(B * S * h, thr);
             dim3 grid = MLP_BACKWARD_INPUT_GRID(h * 4, B, S);
             int num_blocks_x = grid.x;
@@ -1312,7 +1312,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 22: MLP projection backward weight - [MLP_BACKWARD_WEIGHT_GRID(h, h * 4) blocks, 2D grid]
         {
             int op = 22;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 1;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 1;
             dim3 grid_prev = MLP_BACKWARD_INPUT_GRID(h * 4, B, S);
             int expected = grid_prev.x * grid_prev.y;
             dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h, h * 4);
@@ -1338,7 +1338,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 23: GELU backward - [CEIL_DIV(B * S * 4 * h, thr) blocks, 1D grid]
         {
             int op = 23;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 2;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 2;
             dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(h, h * 4);
             int expected = grid_prev.x * grid_prev.y;
             int num_blocks = CEIL_DIV(B * S * 4 * h, thr);
@@ -1360,7 +1360,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 24: MLP FC backward input - [MLP_BACKWARD_INPUT_GRID(h, B, S) blocks, 2D grid]
         {
             int op = 24;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 3;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 3;
             int expected = CEIL_DIV(B * S * 4 * h, thr);
             dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int num_blocks_x = grid.x;
@@ -1385,7 +1385,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 25: MLP FC backward weight - [MLP_BACKWARD_WEIGHT_GRID(h * 4, h) blocks, 2D grid]
         {
             int op = 25;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 4;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 4;
             dim3 grid_prev = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int expected = grid_prev.x * grid_prev.y;
             dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h * 4, h);
@@ -1411,7 +1411,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 26: LayerNorm 2 backward - [B blocks, 1D grid]
         {
             int op = 26;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 5;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 5;
             dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(h * 4, h);
             int expected = grid_prev.x * grid_prev.y;
             int num_blocks = B;
@@ -1433,7 +1433,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 27: Residual backward (res_2) - [CEIL_DIV(B * S * h, thr) blocks, 1D grid]
         {
             int op = 27;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 6;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 6;
             int expected = B;
             int num_blocks = CEIL_DIV(B * S * h, thr);
 
@@ -1454,7 +1454,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 28: Attention projection backward input - [MLP_BACKWARD_INPUT_GRID(h, B, S) blocks, 2D grid]
         {
             int op = 28;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 7;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 7;
             int expected = CEIL_DIV(B * S * h, thr);
             dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int num_blocks_x = grid.x;
@@ -1479,7 +1479,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 29: Attention projection backward weight - [MLP_BACKWARD_WEIGHT_GRID(h, h) blocks, 2D grid]
         {
             int op = 29;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 8;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 8;
             dim3 grid_prev = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int expected = grid_prev.x * grid_prev.y;
             dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h, h);
@@ -1505,7 +1505,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 30: Attention backward - [CEIL_DIV(B * S * n_head, thr) blocks, 1D grid]
         {
             int op = 30;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 9;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 9;
             dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(h, h);
             int expected = grid_prev.x * grid_prev.y;
             int num_blocks = CEIL_DIV(B * S * n_head, thr);
@@ -1527,7 +1527,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 31: QKV backward input - [MLP_BACKWARD_INPUT_GRID(h, B, S) blocks, 2D grid]
         {
             int op = 31;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 10;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 10;
             int expected = CEIL_DIV(B * S * n_head, thr);
             dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int num_blocks_x = grid.x;
@@ -1552,7 +1552,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 32: QKV backward weight - [MLP_BACKWARD_WEIGHT_GRID(h * 3, h) blocks, 2D grid]
         {
             int op = 32;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 11;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 11;
             dim3 grid_prev = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int expected = grid_prev.x * grid_prev.y;
             dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h * 3, h);
@@ -1578,7 +1578,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 33: LayerNorm 1 backward - [B blocks, 1D grid]
         {
             int op = 33;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 12;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 12;
             dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(h * 3, h);
             int expected = grid_prev.x * grid_prev.y;
             int num_blocks = B;
@@ -1601,7 +1601,7 @@ stream_t** schedule_instructions(int seq_len) {
     // OP 34: Embedding backward - [CEIL_DIV(B * S, thr) blocks, 1D grid]
     {
         int op = 34;
-        int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1) * 13) + 12;
+        int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1) * 14) + 12;
         int expected = B;
         int num_blocks = CEIL_DIV(B * S, thr);
 

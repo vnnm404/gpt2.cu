@@ -375,7 +375,7 @@ int main(int argc, char *argv[]) {
     gpuErrchk(cudaMemcpy(d_g_buffers, &g_buffers, sizeof(train_buffers_t), cudaMemcpyHostToDevice));
 
     // allocate global bar
-    int bar_size = config.batch_size * (1 + (config.n_layer * 10 + 3) + 1 + (5 + config.n_layer * 13 + 1));
+    int bar_size = config.batch_size * (1 + (config.n_layer * 10 + 3) + 1 + (5 + config.n_layer * 14 + 1));
     gpuErrchk(cudaMalloc(&bar, bar_size * sizeof(int)));
     gpuErrchk(cudaMemset(bar, 0, bar_size * sizeof(int)));
 
@@ -1227,7 +1227,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 20: Residual backward (res_3) - [CEIL_DIV(B * S * h, thr) blocks, 1D grid]
         {
             int op = 20;
-            int bar_idx = (layer_idx == L - 1) ? (1 + (L * 10) + 3 + 4) : (1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) - 1) * 13 + 12);
+            int bar_idx = (layer_idx == L - 1) ? (1 + (L * 10) + 3 + 4) : (1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) - 1) * 14 + 13);
             int expected = B;
             int num_blocks = CEIL_DIV(B * S * h, thr);
 
@@ -1248,7 +1248,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 21: MLP projection backward input - [MLP_BACKWARD_INPUT_GRID(h * 4, B, S) blocks, 2D grid]
         {
             int op = 21;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13);
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14);
             int expected = CEIL_DIV(B * S * h, thr);
             dim3 grid = MLP_BACKWARD_INPUT_GRID(h * 4, B, S);
             int num_blocks_x = grid.x;
@@ -1273,7 +1273,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 22: MLP projection backward weight - [MLP_BACKWARD_WEIGHT_GRID(h, h * 4) blocks, 2D grid]
         {
             int op = 22;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 1;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 1;
             dim3 grid_prev = MLP_BACKWARD_INPUT_GRID(h * 4, B, S);
             int expected = grid_prev.x * grid_prev.y;
             dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h, h * 4);
@@ -1299,7 +1299,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 23: GELU backward - [CEIL_DIV(B * S * 4 * h, thr) blocks, 1D grid]
         {
             int op = 23;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 2;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 2;
             dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(h, h * 4);
             int expected = grid_prev.x * grid_prev.y;
             int num_blocks = CEIL_DIV(B * S * 4 * h, thr);
@@ -1321,7 +1321,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 24: MLP FC backward input - [MLP_BACKWARD_INPUT_GRID(h, B, S) blocks, 2D grid]
         {
             int op = 24;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 3;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 3;
             int expected = CEIL_DIV(B * S * 4 * h, thr);
             dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int num_blocks_x = grid.x;
@@ -1346,7 +1346,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 25: MLP FC backward weight - [MLP_BACKWARD_WEIGHT_GRID(h * 4, h) blocks, 2D grid]
         {
             int op = 25;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 4;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 4;
             dim3 grid_prev = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int expected = grid_prev.x * grid_prev.y;
             dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h * 4, h);
@@ -1372,7 +1372,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 26: LayerNorm 2 backward - [B blocks, 1D grid]
         {
             int op = 26;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 5;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 5;
             dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(h * 4, h);
             int expected = grid_prev.x * grid_prev.y;
             int num_blocks = B;
@@ -1394,7 +1394,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 27: Residual backward (res_2) - [CEIL_DIV(B * S * h, thr) blocks, 1D grid]
         {
             int op = 27;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 6;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 6;
             int expected = B;
             int num_blocks = CEIL_DIV(B * S * h, thr);
 
@@ -1415,7 +1415,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 28: Attention projection backward input - [MLP_BACKWARD_INPUT_GRID(h, B, S) blocks, 2D grid]
         {
             int op = 28;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 7;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 7;
             int expected = CEIL_DIV(B * S * h, thr);
             dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int num_blocks_x = grid.x;
@@ -1440,7 +1440,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 29: Attention projection backward weight - [MLP_BACKWARD_WEIGHT_GRID(h, h) blocks, 2D grid]
         {
             int op = 29;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 8;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 8;
             dim3 grid_prev = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int expected = grid_prev.x * grid_prev.y;
             dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h, h);
@@ -1466,7 +1466,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 30: Attention backward - [CEIL_DIV(B * S * n_head, thr) blocks, 1D grid]
         {
             int op = 30;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 9;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 9;
             dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(h, h);
             int expected = grid_prev.x * grid_prev.y;
             int num_blocks = CEIL_DIV(B * S * n_head, thr);
@@ -1488,7 +1488,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 31: QKV backward input - [MLP_BACKWARD_INPUT_GRID(h, B, S) blocks, 2D grid]
         {
             int op = 31;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 10;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 10;
             int expected = CEIL_DIV(B * S * n_head, thr);
             dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int num_blocks_x = grid.x;
@@ -1513,7 +1513,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 32: QKV backward weight - [MLP_BACKWARD_WEIGHT_GRID(h * 3, h) blocks, 2D grid]
         {
             int op = 32;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 11;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 11;
             dim3 grid_prev = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int expected = grid_prev.x * grid_prev.y;
             dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h * 3, h);
@@ -1539,7 +1539,7 @@ stream_t** schedule_instructions(int seq_len) {
         // OP 33: LayerNorm 1 backward - [B blocks, 1D grid]
         {
             int op = 33;
-            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 13) + 12;
+            int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 12;
             dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(h * 3, h);
             int expected = grid_prev.x * grid_prev.y;
             int num_blocks = B;
@@ -1562,7 +1562,7 @@ stream_t** schedule_instructions(int seq_len) {
     // OP 34: Embedding backward - [CEIL_DIV(B * S, thr) blocks, 1D grid]
     {
         int op = 34;
-        int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1) * 13) + 12;
+        int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1) * 14) + 12;
         int expected = B;
         int num_blocks = CEIL_DIV(B * S, thr);
 
