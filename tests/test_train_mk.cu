@@ -377,7 +377,6 @@ int main(int argc, char *argv[]) {
     // allocate global bar
     int bar_size = config.batch_size * (1 + (config.n_layer * 10 + 3) + 1 + (5 + config.n_layer * 14 + 1));
     gpuErrchk(cudaMalloc(&bar, bar_size * sizeof(int)));
-    gpuErrchk(cudaMemset(bar, 0, bar_size * sizeof(int)));
 
     int shared_mem_size = 2 * TILE_SIZE * TILE_SIZE * sizeof(float);
     int threads_per_block = 1024;
@@ -403,6 +402,7 @@ int main(int argc, char *argv[]) {
         // Zero gradients
         gpt2_zero_grad(&g_model);
         zero_activation_grads(&g_buffers);
+        gpuErrchk(cudaMemset(bar, 0, bar_size * sizeof(int)));
         
         // forward(d_input_tokens, T);
         // cross_entropy(d_target_tokens, T);
@@ -1740,11 +1740,7 @@ __device__ void execute_stream(
  
     for (int i = 0; i < stream->n; i++) {
         instruction_t instr = stream->instructions[i];
-        if(threadIdx.x == 0 && instr.b_x == 0){
-            printf("MK::%d %d %d %d\n",blockIdx.x, instr.op, instr.layer, instr.bar_idx);
-        }
         execute_instruction(config, model, g_model, buffers, g_buffers, opt_state, seq_len, d_input_tokens, d_target_tokens, bar, instr);
-        __syncthreads();
     }
 }
  
@@ -1929,9 +1925,6 @@ __device__ void execute_instruction(
  
         case 20: {
             // OP 20: Residual backward (res_3)
-            if(threadIdx.x == 0 && instr.b_x == 0){
-                printf("MK::%f %f\n",g_buffers->blocks[instr.layer].mlp_proj.data[0], g_buffers->blocks[instr.layer].res_3.data[0]);
-            }
             residual_backward_device(g_buffers->blocks[instr.layer].res_2.data, g_buffers->blocks[instr.layer].mlp_proj.data, g_buffers->blocks[instr.layer].res_3.data, B * S * h, instr.b_x);
             break;
         }
@@ -1945,9 +1938,6 @@ __device__ void execute_instruction(
  
         case 22: {
             // OP 22: MLP projection backward weight
-//   if(threadIdx.x == 0 && instr.b_x == 0){
-//                 printf("MK::%f %f\n",g_buffers->blocks[instr.layer].mlp_proj.data[0], buffers->blocks[instr.layer].mlp_fc_gelu.data[0]);
-//             }
             mlp_backward_weight_device(g_model->h[instr.layer].mlp.proj_w.data, g_model->h[instr.layer].mlp.proj_b.data, g_buffers->blocks[instr.layer].mlp_proj.data, buffers->blocks[instr.layer].mlp_fc_gelu.data, B, S, h * 4, h, instr.b_x, instr.b_y, shared_mem);
             break;
         }
@@ -1983,13 +1973,7 @@ __device__ void execute_instruction(
             // OP 27: Residual backward (res_2)
  
             float *g_res = (instr.layer == 0) ? g_buffers->encoded.data : g_buffers->blocks[instr.layer - 1].res_3.data;
-            // if(threadIdx.x == 0 && instr.b_x == 0){
-            //     printf("MK::%f\n", g_buffers->blocks[instr.layer].res_2.data[0]);
-            // }
             residual_backward_device(g_res, g_buffers->blocks[instr.layer].att_proj.data, g_buffers->blocks[instr.layer].res_2.data, B * S * h, instr.b_x);
-            // if(threadIdx.x == 0 && instr.b_x == 0){
-            //     printf("MKgres::%f\n", g_res[0]);
-            // }
             break;
         }
  
@@ -2035,9 +2019,6 @@ __device__ void execute_instruction(
             float *res = (instr.layer == 0) ? buffers->encoded.data : buffers->blocks[instr.layer - 1].res_3.data;
  
             layernorm_backward_device(g_res, g_model->h[instr.layer].ln_1.w.data, g_model->h[instr.layer].ln_1.b.data, g_buffers->blocks[instr.layer].ln_1.data, res, model->h[instr.layer].ln_1.w.data, buffers->blocks[instr.layer].ln_1_mean.data, buffers->blocks[instr.layer].ln_1_rstd.data, B, S, h, instr.b_x);
-            // if(threadIdx.x == 0 && instr.b_x == 0){
-            //     printf("MKgres::%f\n", g_res[0]);
-            // }
             break;
         }
  
