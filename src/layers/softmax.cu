@@ -24,7 +24,7 @@ __device__ float warpReduceSum(float val) {
 // Each block handles one (batch, seq_len) position
 // Threads cooperate to compute softmax over dim
 __device__ void softmax_forward_device(float *out, const float *input, int batch_size, int seq_len, int dim,
-                                       int blockIdx_x) {
+                                       int blockIdx_x, float *shared_mem) {
     // Each block processes one (batch, time) position
     int bt = blockIdx_x;
     if (bt >= batch_size * seq_len) return;
@@ -33,8 +33,10 @@ __device__ void softmax_forward_device(float *out, const float *input, int batch
     float *out_bt = out + bt * dim;
 
     // Shared memory for block-level reductions
-    __shared__ float shared_max[32];  // One per warp
-    __shared__ float shared_sum[32];
+    // __shared__ float shared_max[32];  // One per warp
+    // __shared__ float shared_sum[32];
+    float *shared_max = shared_mem;          // size 32
+    float *shared_sum = shared_mem + 32;     // size 32
 
     int tid = threadIdx.x;
     int warpId = tid / 32;

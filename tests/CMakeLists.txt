@@ -1,20 +1,30 @@
-# Build tests with Unity framework
-
-# Build Unity as a library
+# Build Unity
 add_library(unity STATIC ${CMAKE_SOURCE_DIR}/third_party/unity.c)
 target_include_directories(unity PUBLIC ${CMAKE_SOURCE_DIR}/third_party)
 
-# Automatically find all test_*.cu files
+# Collect CUDA test files
 file(GLOB TEST_SOURCES "test_*.cu")
 
-# Create an executable for each test file
 foreach(TEST_SOURCE ${TEST_SOURCES})
-    # Get the filename without extension
     get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
-    
-    # Create executable
+
+    # IMPORTANT: tell CMake these are CUDA sources
+    set_source_files_properties(${TEST_SOURCE} PROPERTIES LANGUAGE CUDA)
+
     add_executable(${TEST_NAME} ${TEST_SOURCE})
+
+    # Includes
     target_include_directories(${TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
+
+    # Link everything
     target_link_libraries(${TEST_NAME} gpt2 unity)
-    set_target_properties(${TEST_NAME} PROPERTIES LINKER_LANGUAGE C)
+
+    # DO NOT FORCE LINKER LANGUAGE TO C!
+    # This was the cause of your kernel differences.
+
+    # Enable proper CUDA device linking (MUST MATCH PROGRAMS)
+    set_target_properties(${TEST_NAME} PROPERTIES 
+        CUDA_SEPARABLE_COMPILATION ON
+        CUDA_ARCHITECTURES 86
+    )
 endforeach()
