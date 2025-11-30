@@ -5,6 +5,11 @@
 #include <math.h>
 #include <time.h>
 #include <cuda_runtime.h>
+// C++ containers used for top-k computation
+#include <vector>
+#include <queue>
+#include <functional>
+#include <algorithm>
 
 #include "gpt2/gpt2.h"
 #include "gpt2/layers/embedding.h"
@@ -127,6 +132,7 @@ typedef struct {
 
     int bar_idx;
     int expected;
+    bool inc;
 } instruction_t;
 
 typedef struct {
@@ -1585,7 +1591,48 @@ stream_t** schedule_instructions(int seq_len) {
     }
  
     printf("Total instructions scheduled: %d\n", instruction_count);
- 
+
+    // Populate the `inc` flag: only the last `min(run_length, NUM_SM)`
+    // instructions of each contiguous run of the same op should perform
+    // the atomic increment. First, initialize all to false.
+    for (int i = 0; i < instruction_count; i++) {
+        all_instructions[i].inc = false;
+    }
+
+    // Walk through instructions and detect contiguous runs of the same op.
+    // For each run, mark the last `min(run_len, NUM_SM)` entries as `inc = true`.
+    if (instruction_count > 0) {
+        int run_start = 0;
+        int run_op = all_instructions[0].op;
+
+        for (int i = 1; i <= instruction_count; i++) {
+            // Treat end of array as run boundary
+            int cur_op = (i < instruction_count) ? all_instructions[i].op : -9999;
+            if (i == instruction_count || cur_op != run_op) {
+                int run_end = i - 1;
+                int run_len = run_end - run_start + 1;
+
+                // Only mark runs with non-negative ops and skip ops that
+                // should not perform increments (e.g. op 34).
+                if (run_op >= 0 && run_op != 34) {
+                    int to_mark = (run_len < NUM_SM) ? run_len : NUM_SM;
+                    int start_idx = run_end - to_mark + 1;
+                    for (int j = start_idx; j <= run_end; j++) {
+                        if (j >= 0 && j < instruction_count) {
+                            all_instructions[j].inc = true;
+                        }
+                    }
+                }
+
+                // start a new run if not at the end
+                if (i < instruction_count) {
+                    run_start = i;
+                    run_op = cur_op;
+                }
+            }
+        }
+    }
+
     // Distribute instructions to SMs in round-robin fashion
     int *sm_counts = (int *)calloc(NUM_SM, sizeof(int));
  
@@ -1777,7 +1824,9 @@ __device__ void execute_instruction(
  
     if (instr.op != 1) {
         if (threadIdx.x == 0) {
-            while (vbar[instr.bar_idx] < instr.expected) {
+            // printf("SM %d waiting at barrier %d for op %d (expecting %d, actual %d)\n", blockIdx.x, instr.bar_idx, instr.op, min(NUM_SM, instr.expected), vbar[instr.bar_idx]);
+            while (vbar[instr.bar_idx] < min(NUM_SM, instr.expected)) {
+                // printf("[SPIN] SM %d waiting at barrier %d for op %d (expecting %d, actual %d)\n", blockIdx.x, instr.bar_idx, instr.op, min(NUM_SM, instr.expected), vbar[instr.bar_idx]);
                 // __nanosleep(10);
             }
         }
@@ -2034,8 +2083,10 @@ __device__ void execute_instruction(
     }
  
     __syncthreads();
- 
-    if (instr.op != 34 && threadIdx.x == 0) {
+
+    // Only the instructions marked with `inc` perform the atomic increment.
+    if (instr.inc && threadIdx.x == 0) {
+        // printf("[INC]\n");
         atomicAdd(&bar[instr.bar_idx + 1], 1);
     }
 }
