@@ -29,7 +29,7 @@
 
 
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
-#define NUM_SM 38
+#define NUM_SM 28
 
 #define gpuErrchk(ans)                        \
     {                                         \
@@ -231,7 +231,7 @@ int main(int argc, char *argv[]) {
     
     cudaFuncAttributes attr;
     cudaFuncGetAttributes(&attr, megakernel);
-    printf("megakernel: numRegs=%d, sharedSizeBytes=%d, maxThreadsPerBlock=%d\n",
+    printf("megakernel: numRegs=%d, sharedSizeBytes=%zu, maxThreadsPerBlock=%d\n",
        attr.numRegs, attr.sharedSizeBytes, attr.maxThreadsPerBlock);
     
     // Initialize models

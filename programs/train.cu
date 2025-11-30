@@ -29,7 +29,7 @@
 
 
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
-#define NUM_SM 38
+#define NUM_SM 28
 
 #define gpuErrchk(ans)                        \
     {                                         \
@@ -217,7 +217,7 @@ int main()
     
     cudaFuncAttributes attr;
     cudaFuncGetAttributes(&attr, megakernel);
-    printf("megakernel: numRegs=%d, sharedSizeBytes=%d, maxThreadsPerBlock=%d\n",
+    printf("megakernel: numRegs=%d, sharedSizeBytes=%zu, maxThreadsPerBlock=%d\n",
        attr.numRegs, attr.sharedSizeBytes, attr.maxThreadsPerBlock);
 
     if (gpt2_initialize(&model, &config) != 0) {
@@ -318,7 +318,6 @@ int main()
     cudaEventCreate(&stop);
     cudaEventRecord(start);
 
-    for (int i = 0; i < 10; i++) {
     megakernel<<<NUM_SM, threads_per_block, shared_mem_size>>>(
         config,
         d_model,
@@ -337,7 +336,6 @@ int main()
     // forward(d_input_tokens, seq_len);
     // cross_entropy(d_target_tokens, seq_len);
     // backward(d_input_tokens, d_target_tokens, seq_len);
-    }
 
     gpuErrchk(cudaGetLastError());
     gpuErrchk(cudaDeviceSynchronize());
