@@ -23,7 +23,7 @@ __device__ float warpReduceSum(float val) {
 // input: [batch_size, seq_len, dim]
 // Each block handles one (batch, seq_len) position
 // Threads cooperate to compute softmax over dim
-__device__ __noinline__ void softmax_forward_device(float *out, const float *input, int batch_size, int seq_len, int dim,
+__device__ void softmax_forward_device(float *out, const float *input, int batch_size, int seq_len, int dim,
                                        int blockIdx_x, float *shared_mem) {
     // Each block processes one (batch, time) position
     int bt = blockIdx_x;

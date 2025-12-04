@@ -1,7 +1,7 @@
 #include "gpt2/layers/cross_entropy.h"
 
 // Device function for cross entropy forward pass - Megakernel compatible
-__device__ __noinline__ void cross_entropy_forward_device(float *losses, const float *probs, const int *target, int batch_size, int seq_len, int vocab_size,
+__device__ void cross_entropy_forward_device(float *losses, const float *probs, const int *target, int batch_size, int seq_len, int vocab_size,
                                              int blockIdx_x) {
     int idx = blockIdx_x * blockDim.x + threadIdx.x;
     int total_elements = batch_size * seq_len;
@@ -41,7 +41,7 @@ __global__ void cross_entropy_forward(float *losses, const float *probs, const i
 }
 
 // Device function for cross entropy backward pass - Megakernel compatible
-__device__ __noinline__ void cross_entropy_backward_device(float *g_logits, float *probs, const int *targets, int batch_size, int seq_len, int vocab_size,
+__device__ void cross_entropy_backward_device(float *g_logits, float *probs, const int *targets, int batch_size, int seq_len, int vocab_size,
                                               int blockIdx_x) {
     int idx = blockIdx_x * blockDim.x + threadIdx.x;
     int total_elements = batch_size * seq_len;

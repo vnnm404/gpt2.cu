@@ -50,82 +50,6 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort =
     }
 }
 
-// ============================================================================
-// Compile-time constants for GPT-2 124M - enables better register allocation
-// ============================================================================
-#define H 768
-#define N_HEAD 12
-#define N_LAYER 12
-#define MAXT 1024
-#define VOCAB 50257
-
-// Parameter offsets within a layer (compile-time constants)
-#define LAYER_PARAMS_SIZE (H + H + H*3*H + 3*H + H*H + H + H + H + H*4*H + 4*H + 4*H*H + H)
-#define P_LN1_W 0
-#define P_LN1_B (H)
-#define P_QKV_W (2*H)
-#define P_QKV_B (2*H + H*3*H)
-#define P_ATTN_PROJ_W (2*H + H*3*H + 3*H)
-#define P_ATTN_PROJ_B (2*H + H*3*H + 3*H + H*H)
-#define P_LN2_W (2*H + H*3*H + 3*H + H*H + H)
-#define P_LN2_B (2*H + H*3*H + 3*H + H*H + 2*H)
-#define P_FC_W (2*H + H*3*H + 3*H + H*H + 3*H)
-#define P_FC_B (2*H + H*3*H + 3*H + H*H + 3*H + H*4*H)
-#define P_MLP_PROJ_W (2*H + H*3*H + 3*H + H*H + 3*H + H*4*H + 4*H)
-#define P_MLP_PROJ_B (2*H + H*3*H + 3*H + H*H + 3*H + H*4*H + 4*H + 4*H*H)
-
-// Macro to get parameter pointers
-#define PARAM_WTE(p) (p)
-#define PARAM_WPE(p) ((p) + H * VOCAB)
-#define PARAM_LAYER(p, l) ((p) + H * VOCAB + MAXT * H + (l) * LAYER_PARAMS_SIZE)
-#define PARAM_LN_F_W(p) ((p) + H * VOCAB + MAXT * H + N_LAYER * LAYER_PARAMS_SIZE)
-#define PARAM_LN_F_B(p) ((p) + H * VOCAB + MAXT * H + N_LAYER * LAYER_PARAMS_SIZE + H)
-
-// ============================================================================
-// Activation offset macros - these use runtime B, S but are more efficient than functions
-// Memory layout for activations:
-//   encoded (B * S * H),
-//   [per layer: ln_1 (B*S*H), ln_1_mean (B*S), ln_1_rstd (B*S), qkv (B*S*3H), atty (B*S*H),
-//               preatt (B*N_HEAD*S*S), att (B*N_HEAD*S*S), att_proj (B*S*H), res_2 (B*S*H),
-//               ln_2 (B*S*H), ln_2_mean (B*S), ln_2_rstd (B*S), mlp_fc (B*S*4H), 
-//               mlp_fc_gelu (B*S*4H), mlp_proj (B*S*H), res_3 (B*S*H)]
-//   ln_f (B*S*H), ln_f_mean (B*S), ln_f_rstd (B*S), logits (B*S*V), probs (B*S*V), losses (B*S)
-// ============================================================================
-
-// Size of one layer's activations (macro version)
-#define LAYER_ACTS_SIZE(B, S) \
-    ((B)*(S)*H + (B)*(S) + (B)*(S) + (B)*(S)*3*H + (B)*(S)*H + \
-     (B)*N_HEAD*(S)*(S) + (B)*N_HEAD*(S)*(S) + (B)*(S)*H + (B)*(S)*H + \
-     (B)*(S)*H + (B)*(S) + (B)*(S) + (B)*(S)*4*H + (B)*(S)*4*H + (B)*(S)*H + (B)*(S)*H)
-
-// Activation offsets within a layer (relative to layer base)
-#define A_LN1(B, S) 0
-#define A_LN1_MEAN(B, S) ((B)*(S)*H)
-#define A_LN1_RSTD(B, S) ((B)*(S)*H + (B)*(S))
-#define A_QKV(B, S) ((B)*(S)*H + 2*(B)*(S))
-#define A_ATTY(B, S) ((B)*(S)*H + 2*(B)*(S) + (B)*(S)*3*H)
-#define A_PREATT(B, S) ((B)*(S)*H + 2*(B)*(S) + (B)*(S)*3*H + (B)*(S)*H)
-#define A_ATT(B, S) ((B)*(S)*H + 2*(B)*(S) + (B)*(S)*3*H + (B)*(S)*H + (B)*N_HEAD*(S)*(S))
-#define A_ATT_PROJ(B, S) ((B)*(S)*H + 2*(B)*(S) + (B)*(S)*3*H + (B)*(S)*H + 2*(B)*N_HEAD*(S)*(S))
-#define A_RES2(B, S) ((B)*(S)*H + 2*(B)*(S) + (B)*(S)*3*H + 2*(B)*(S)*H + 2*(B)*N_HEAD*(S)*(S))
-#define A_LN2(B, S) ((B)*(S)*H + 2*(B)*(S) + (B)*(S)*3*H + 3*(B)*(S)*H + 2*(B)*N_HEAD*(S)*(S))
-#define A_LN2_MEAN(B, S) ((B)*(S)*H + 2*(B)*(S) + (B)*(S)*3*H + 4*(B)*(S)*H + 2*(B)*N_HEAD*(S)*(S))
-#define A_LN2_RSTD(B, S) ((B)*(S)*H + 2*(B)*(S) + (B)*(S)*3*H + 4*(B)*(S)*H + 2*(B)*N_HEAD*(S)*(S) + (B)*(S))
-#define A_MLP_FC(B, S) ((B)*(S)*H + 2*(B)*(S) + (B)*(S)*3*H + 4*(B)*(S)*H + 2*(B)*N_HEAD*(S)*(S) + 2*(B)*(S))
-#define A_MLP_GELU(B, S) ((B)*(S)*H + 2*(B)*(S) + (B)*(S)*3*H + 4*(B)*(S)*H + 2*(B)*N_HEAD*(S)*(S) + 2*(B)*(S) + (B)*(S)*4*H)
-#define A_MLP_PROJ(B, S) ((B)*(S)*H + 2*(B)*(S) + (B)*(S)*3*H + 4*(B)*(S)*H + 2*(B)*N_HEAD*(S)*(S) + 2*(B)*(S) + 2*(B)*(S)*4*H)
-#define A_RES3(B, S) ((B)*(S)*H + 2*(B)*(S) + (B)*(S)*3*H + 5*(B)*(S)*H + 2*(B)*N_HEAD*(S)*(S) + 2*(B)*(S) + 2*(B)*(S)*4*H)
-
-// Macros to get activation pointers
-#define ACT_ENCODED(a, B, S) (a)
-#define ACT_LAYER(a, B, S, l) ((a) + (B)*(S)*H + (l) * LAYER_ACTS_SIZE(B, S))
-#define ACT_LN_F(a, B, S) ((a) + (B)*(S)*H + N_LAYER * LAYER_ACTS_SIZE(B, S))
-#define ACT_LN_F_MEAN(a, B, S) ((a) + (B)*(S)*H + N_LAYER * LAYER_ACTS_SIZE(B, S) + (B)*(S)*H)
-#define ACT_LN_F_RSTD(a, B, S) ((a) + (B)*(S)*H + N_LAYER * LAYER_ACTS_SIZE(B, S) + (B)*(S)*H + (B)*(S))
-#define ACT_LOGITS(a, B, S) ((a) + (B)*(S)*H + N_LAYER * LAYER_ACTS_SIZE(B, S) + (B)*(S)*H + 2*(B)*(S))
-#define ACT_PROBS(a, B, S, V) ((a) + (B)*(S)*H + N_LAYER * LAYER_ACTS_SIZE(B, S) + (B)*(S)*H + 2*(B)*(S) + (B)*(S)*(V))
-#define ACT_LOSSES(a, B, S, V) ((a) + (B)*(S)*H + N_LAYER * LAYER_ACTS_SIZE(B, S) + (B)*(S)*H + 2*(B)*(S) + 2*(B)*(S)*(V))
-
 // Configuration matching the test expectations
 config_t config = {
     .vocab_size = 50257,
@@ -140,6 +64,10 @@ config_t config = {
 // Model structures
 gpt2_t model;
 gpt2_t g_model;  // model weight gradients
+
+// Device copies for kernel
+gpt2_t *d_model;
+gpt2_t *d_g_model;
 
 // Training buffer structures (same as train.cu)
 typedef struct
@@ -164,8 +92,6 @@ typedef struct
 
 typedef struct
 {
-    float *activations_memory;  // Single contiguous memory block for all activations
-    size_t num_activations;     // Total number of activation floats
     tensor_t encoded;
     layer_buffers_t blocks[NUM_LAYERS];
     tensor_t ln_f;
@@ -178,6 +104,10 @@ typedef struct
 
 train_buffers_t buffers;
 train_buffers_t g_buffers;
+
+// Device copies for kernel
+train_buffers_t *d_buffers;
+train_buffers_t *d_g_buffers;
 
 // AdamW optimizer state
 typedef struct {
@@ -227,13 +157,15 @@ stream_t** schedule_instructions(int seq_len);
 void free_schedule(stream_t **d_streams);
 
 __global__ void megakernel(
-    int B,              // batch size (runtime)
+    config_t config,
 
-    float *params,      // model parameters base pointer
-    float *g_params,    // gradient parameters base pointer
+    gpt2_t *model,
+    gpt2_t *g_model,
 
-    float *acts,        // activations base pointer
-    float *g_acts,      // gradient activations base pointer
+    train_buffers_t *buffers,
+    train_buffers_t *g_buffers,
+
+    adamw_state_t opt_state,
 
     int seq_len,
     const int *d_input_tokens,
@@ -244,13 +176,15 @@ __global__ void megakernel(
 );
 
 __device__ void execute_stream(
-    int B,
+    config_t config,
 
-    float *params,
-    float *g_params,
+    gpt2_t *model,
+    gpt2_t *g_model,
 
-    float *acts,
-    float *g_acts,
+    train_buffers_t *buffers,
+    train_buffers_t *g_buffers,
+
+    adamw_state_t opt_state,
 
     int seq_len,
     const int *d_input_tokens,
@@ -261,13 +195,15 @@ __device__ void execute_stream(
 );
 
 __device__ void execute_instruction(
-    int B,
+    config_t config,
 
-    float *params,
-    float *g_params,
+    gpt2_t *model,
+    gpt2_t *g_model,
 
-    float *acts,
-    float *g_acts,
+    train_buffers_t *buffers,
+    train_buffers_t *g_buffers,
+
+    adamw_state_t opt_state,
 
     int seq_len,
     const int *d_input_tokens,
@@ -432,6 +368,18 @@ int main(int argc, char *argv[]) {
     setup_train_buffers(&buffers, T);
     setup_train_buffers(&g_buffers, T);
 
+    // Allocate device memory for structs
+    gpuErrchk(cudaMalloc(&d_model, sizeof(gpt2_t)));
+    gpuErrchk(cudaMalloc(&d_g_model, sizeof(gpt2_t)));
+    gpuErrchk(cudaMalloc(&d_buffers, sizeof(train_buffers_t)));
+    gpuErrchk(cudaMalloc(&d_g_buffers, sizeof(train_buffers_t)));
+    
+    // Copy structs to device
+    gpuErrchk(cudaMemcpy(d_model, &model, sizeof(gpt2_t), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_g_model, &g_model, sizeof(gpt2_t), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_buffers, &buffers, sizeof(train_buffers_t), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_g_buffers, &g_buffers, sizeof(train_buffers_t), cudaMemcpyHostToDevice));
+
     // allocate global bar
     int bar_size = config.batch_size * (1 + (config.n_layer * 10 + 3) + 1 + (5 + config.n_layer * 14 + 1));
     gpuErrchk(cudaMalloc(&bar, bar_size * sizeof(int)));
@@ -467,11 +415,12 @@ int main(int argc, char *argv[]) {
         // backward(d_input_tokens, d_target_tokens, T);
 
         megakernel<<<NUM_SM, threads_per_block, shared_mem_size>>>(
-            B,
-            model.params_memory,
-            g_model.params_memory,
-            buffers.activations_memory,
-            g_buffers.activations_memory,
+            config,
+            d_model,
+            d_g_model,
+            d_buffers,
+            d_g_buffers,
+            opt_state,
             T,
             d_input_tokens,
             d_target_tokens,
@@ -546,273 +495,90 @@ int setup_train_buffers(train_buffers_t *buffers, int seq_len)
     int V = config.vocab_size;
     int four_h = 4 * h;
 
-    // Calculate total size needed for all activations
-    size_t total_activations = 0;
-
-    // encoded: [B, S, h]
-    total_activations += B * S * h;
-
-    // Per layer activations
-    for (int i = 0; i < config.n_layer; i++) {
-        total_activations += B * S * h;           // ln_1
-        total_activations += B * S;               // ln_1_mean
-        total_activations += B * S;               // ln_1_rstd
-        total_activations += B * S * 3 * h;       // qkv
-        total_activations += B * S * h;           // atty
-        total_activations += B * n_head * S * S;  // preatt
-        total_activations += B * n_head * S * S;  // att
-        total_activations += B * S * h;           // att_proj
-        total_activations += B * S * h;           // res_2
-        total_activations += B * S * h;           // ln_2
-        total_activations += B * S;               // ln_2_mean
-        total_activations += B * S;               // ln_2_rstd
-        total_activations += B * S * four_h;      // mlp_fc
-        total_activations += B * S * four_h;      // mlp_fc_gelu
-        total_activations += B * S * h;           // mlp_proj
-        total_activations += B * S * h;           // res_3
-    }
-
-    // Final activations
-    total_activations += B * S * h;   // ln_f
-    total_activations += B * S;       // ln_f_mean
-    total_activations += B * S;       // ln_f_rstd
-    total_activations += B * S * V;   // logits
-    total_activations += B * S * V;   // probs
-    total_activations += B * S;       // losses
-
-    // Allocate single contiguous block on GPU
-    cudaError_t err = cudaMalloc(&buffers->activations_memory, total_activations * sizeof(float));
-    if (err != cudaSuccess) {
-        return -1;
-    }
-    buffers->num_activations = total_activations;
-
-    // Set up tensor structures with pointers into this block
-    float *ptr = buffers->activations_memory;
-
-    // encoded
-    buffers->encoded.ndim = 3;
-    buffers->encoded.shape[0] = B;
-    buffers->encoded.shape[1] = S;
-    buffers->encoded.shape[2] = h;
-    buffers->encoded.shape[3] = 0;
-    buffers->encoded.data = ptr;
-    ptr += B * S * h;
+    int encoded_shape[3] = {B, S, h};
+    buffers->encoded = tensor_alloc(3, encoded_shape);
 
     for (int i = 0; i < config.n_layer; i++)
     {
         layer_buffers_t *layer_bufs = &buffers->blocks[i];
 
-        // ln_1
-        layer_bufs->ln_1.ndim = 3;
-        layer_bufs->ln_1.shape[0] = B;
-        layer_bufs->ln_1.shape[1] = S;
-        layer_bufs->ln_1.shape[2] = h;
-        layer_bufs->ln_1.shape[3] = 0;
-        layer_bufs->ln_1.data = ptr;
-        ptr += B * S * h;
+        int ln1_shape[3] = {B, S, h};
+        int ln1_mean_shape[2] = {B, S};
+        int qkv_shape[3] = {B, S, 3 * h};
+        int atty_shape[3] = {B, S, h};
+        int preatt_shape[4] = {B, n_head, S, S};
+        int att_shape[4] = {B, n_head, S, S};
+        int att_proj_shape[3] = {B, S, h};
+        int res_shape[3] = {B, S, h};
+        int ln2_shape[3] = {B, S, h};
+        int ln2_mean_shape[2] = {B, S};
+        int mlp_fc_shape[3] = {B, S, four_h};
+        int mlp_fc_gelu_shape[3] = {B, S, four_h};
+        int mlp_proj_shape[3] = {B, S, h};
 
-        // ln_1_mean
-        layer_bufs->ln_1_mean.ndim = 2;
-        layer_bufs->ln_1_mean.shape[0] = B;
-        layer_bufs->ln_1_mean.shape[1] = S;
-        layer_bufs->ln_1_mean.shape[2] = 0;
-        layer_bufs->ln_1_mean.shape[3] = 0;
-        layer_bufs->ln_1_mean.data = ptr;
-        ptr += B * S;
-
-        // ln_1_rstd
-        layer_bufs->ln_1_rstd.ndim = 2;
-        layer_bufs->ln_1_rstd.shape[0] = B;
-        layer_bufs->ln_1_rstd.shape[1] = S;
-        layer_bufs->ln_1_rstd.shape[2] = 0;
-        layer_bufs->ln_1_rstd.shape[3] = 0;
-        layer_bufs->ln_1_rstd.data = ptr;
-        ptr += B * S;
-
-        // qkv
-        layer_bufs->qkv.ndim = 3;
-        layer_bufs->qkv.shape[0] = B;
-        layer_bufs->qkv.shape[1] = S;
-        layer_bufs->qkv.shape[2] = 3 * h;
-        layer_bufs->qkv.shape[3] = 0;
-        layer_bufs->qkv.data = ptr;
-        ptr += B * S * 3 * h;
-
-        // atty
-        layer_bufs->atty.ndim = 3;
-        layer_bufs->atty.shape[0] = B;
-        layer_bufs->atty.shape[1] = S;
-        layer_bufs->atty.shape[2] = h;
-        layer_bufs->atty.shape[3] = 0;
-        layer_bufs->atty.data = ptr;
-        ptr += B * S * h;
-
-        // preatt
-        layer_bufs->preatt.ndim = 4;
-        layer_bufs->preatt.shape[0] = B;
-        layer_bufs->preatt.shape[1] = n_head;
-        layer_bufs->preatt.shape[2] = S;
-        layer_bufs->preatt.shape[3] = S;
-        layer_bufs->preatt.data = ptr;
-        ptr += B * n_head * S * S;
-
-        // att
-        layer_bufs->att.ndim = 4;
-        layer_bufs->att.shape[0] = B;
-        layer_bufs->att.shape[1] = n_head;
-        layer_bufs->att.shape[2] = S;
-        layer_bufs->att.shape[3] = S;
-        layer_bufs->att.data = ptr;
-        ptr += B * n_head * S * S;
-
-        // att_proj
-        layer_bufs->att_proj.ndim = 3;
-        layer_bufs->att_proj.shape[0] = B;
-        layer_bufs->att_proj.shape[1] = S;
-        layer_bufs->att_proj.shape[2] = h;
-        layer_bufs->att_proj.shape[3] = 0;
-        layer_bufs->att_proj.data = ptr;
-        ptr += B * S * h;
-
-        // res_2
-        layer_bufs->res_2.ndim = 3;
-        layer_bufs->res_2.shape[0] = B;
-        layer_bufs->res_2.shape[1] = S;
-        layer_bufs->res_2.shape[2] = h;
-        layer_bufs->res_2.shape[3] = 0;
-        layer_bufs->res_2.data = ptr;
-        ptr += B * S * h;
-
-        // ln_2
-        layer_bufs->ln_2.ndim = 3;
-        layer_bufs->ln_2.shape[0] = B;
-        layer_bufs->ln_2.shape[1] = S;
-        layer_bufs->ln_2.shape[2] = h;
-        layer_bufs->ln_2.shape[3] = 0;
-        layer_bufs->ln_2.data = ptr;
-        ptr += B * S * h;
-
-        // ln_2_mean
-        layer_bufs->ln_2_mean.ndim = 2;
-        layer_bufs->ln_2_mean.shape[0] = B;
-        layer_bufs->ln_2_mean.shape[1] = S;
-        layer_bufs->ln_2_mean.shape[2] = 0;
-        layer_bufs->ln_2_mean.shape[3] = 0;
-        layer_bufs->ln_2_mean.data = ptr;
-        ptr += B * S;
-
-        // ln_2_rstd
-        layer_bufs->ln_2_rstd.ndim = 2;
-        layer_bufs->ln_2_rstd.shape[0] = B;
-        layer_bufs->ln_2_rstd.shape[1] = S;
-        layer_bufs->ln_2_rstd.shape[2] = 0;
-        layer_bufs->ln_2_rstd.shape[3] = 0;
-        layer_bufs->ln_2_rstd.data = ptr;
-        ptr += B * S;
-
-        // mlp_fc
-        layer_bufs->mlp_fc.ndim = 3;
-        layer_bufs->mlp_fc.shape[0] = B;
-        layer_bufs->mlp_fc.shape[1] = S;
-        layer_bufs->mlp_fc.shape[2] = four_h;
-        layer_bufs->mlp_fc.shape[3] = 0;
-        layer_bufs->mlp_fc.data = ptr;
-        ptr += B * S * four_h;
-
-        // mlp_fc_gelu
-        layer_bufs->mlp_fc_gelu.ndim = 3;
-        layer_bufs->mlp_fc_gelu.shape[0] = B;
-        layer_bufs->mlp_fc_gelu.shape[1] = S;
-        layer_bufs->mlp_fc_gelu.shape[2] = four_h;
-        layer_bufs->mlp_fc_gelu.shape[3] = 0;
-        layer_bufs->mlp_fc_gelu.data = ptr;
-        ptr += B * S * four_h;
-
-        // mlp_proj
-        layer_bufs->mlp_proj.ndim = 3;
-        layer_bufs->mlp_proj.shape[0] = B;
-        layer_bufs->mlp_proj.shape[1] = S;
-        layer_bufs->mlp_proj.shape[2] = h;
-        layer_bufs->mlp_proj.shape[3] = 0;
-        layer_bufs->mlp_proj.data = ptr;
-        ptr += B * S * h;
-
-        // res_3
-        layer_bufs->res_3.ndim = 3;
-        layer_bufs->res_3.shape[0] = B;
-        layer_bufs->res_3.shape[1] = S;
-        layer_bufs->res_3.shape[2] = h;
-        layer_bufs->res_3.shape[3] = 0;
-        layer_bufs->res_3.data = ptr;
-        ptr += B * S * h;
+        layer_bufs->ln_1 = tensor_alloc(3, ln1_shape);
+        layer_bufs->ln_1_mean = tensor_alloc(2, ln1_mean_shape);
+        layer_bufs->ln_1_rstd = tensor_alloc(2, ln1_mean_shape);
+        layer_bufs->qkv = tensor_alloc(3, qkv_shape);
+        layer_bufs->atty = tensor_alloc(3, atty_shape);
+        layer_bufs->preatt = tensor_alloc(4, preatt_shape);
+        layer_bufs->att = tensor_alloc(4, att_shape);
+        layer_bufs->att_proj = tensor_alloc(3, att_proj_shape);
+        layer_bufs->res_2 = tensor_alloc(3, res_shape);
+        layer_bufs->ln_2 = tensor_alloc(3, ln2_shape);
+        layer_bufs->ln_2_mean = tensor_alloc(2, ln2_mean_shape);
+        layer_bufs->ln_2_rstd = tensor_alloc(2, ln2_mean_shape);
+        layer_bufs->mlp_fc = tensor_alloc(3, mlp_fc_shape);
+        layer_bufs->mlp_fc_gelu = tensor_alloc(3, mlp_fc_gelu_shape);
+        layer_bufs->mlp_proj = tensor_alloc(3, mlp_proj_shape);
+        layer_bufs->res_3 = tensor_alloc(3, res_shape);
     }
 
-    // ln_f
-    buffers->ln_f.ndim = 3;
-    buffers->ln_f.shape[0] = B;
-    buffers->ln_f.shape[1] = S;
-    buffers->ln_f.shape[2] = h;
-    buffers->ln_f.shape[3] = 0;
-    buffers->ln_f.data = ptr;
-    ptr += B * S * h;
+    int ln_f_shape[3] = {B, S, h};
+    int ln_f_mean_shape[2] = {B, S};
+    int logits_shape[3] = {B, S, V};
+    int probs_shape[3] = {B, S, V};
+    int losses_shape[2] = {B, S};
 
-    // ln_f_mean
-    buffers->ln_f_mean.ndim = 2;
-    buffers->ln_f_mean.shape[0] = B;
-    buffers->ln_f_mean.shape[1] = S;
-    buffers->ln_f_mean.shape[2] = 0;
-    buffers->ln_f_mean.shape[3] = 0;
-    buffers->ln_f_mean.data = ptr;
-    ptr += B * S;
-
-    // ln_f_rstd
-    buffers->ln_f_rstd.ndim = 2;
-    buffers->ln_f_rstd.shape[0] = B;
-    buffers->ln_f_rstd.shape[1] = S;
-    buffers->ln_f_rstd.shape[2] = 0;
-    buffers->ln_f_rstd.shape[3] = 0;
-    buffers->ln_f_rstd.data = ptr;
-    ptr += B * S;
-
-    // logits
-    buffers->logits.ndim = 3;
-    buffers->logits.shape[0] = B;
-    buffers->logits.shape[1] = S;
-    buffers->logits.shape[2] = V;
-    buffers->logits.shape[3] = 0;
-    buffers->logits.data = ptr;
-    ptr += B * S * V;
-
-    // probs
-    buffers->probs.ndim = 3;
-    buffers->probs.shape[0] = B;
-    buffers->probs.shape[1] = S;
-    buffers->probs.shape[2] = V;
-    buffers->probs.shape[3] = 0;
-    buffers->probs.data = ptr;
-    ptr += B * S * V;
-
-    // losses
-    buffers->losses.ndim = 2;
-    buffers->losses.shape[0] = B;
-    buffers->losses.shape[1] = S;
-    buffers->losses.shape[2] = 0;
-    buffers->losses.shape[3] = 0;
-    buffers->losses.data = ptr;
-    ptr += B * S;
+    buffers->ln_f = tensor_alloc(3, ln_f_shape);
+    buffers->ln_f_mean = tensor_alloc(2, ln_f_mean_shape);
+    buffers->ln_f_rstd = tensor_alloc(2, ln_f_mean_shape);
+    buffers->logits = tensor_alloc(3, logits_shape);
+    buffers->probs = tensor_alloc(3, probs_shape);
+    buffers->losses = tensor_alloc(2, losses_shape);
 
     return 0;
 }
 
 void free_train_buffers(train_buffers_t *buffers)
 {
-    // Free the single contiguous activation memory block
-    if (buffers->activations_memory) {
-        cudaFree(buffers->activations_memory);
-        buffers->activations_memory = NULL;
+    tensor_free(&buffers->encoded);
+    for (int i = 0; i < config.n_layer; i++) {
+        layer_buffers_t *layer_bufs = &buffers->blocks[i];
+
+        tensor_free(&layer_bufs->ln_1);
+        tensor_free(&layer_bufs->ln_1_mean);
+        tensor_free(&layer_bufs->ln_1_rstd);
+        tensor_free(&layer_bufs->qkv);
+        tensor_free(&layer_bufs->atty);
+        tensor_free(&layer_bufs->preatt);
+        tensor_free(&layer_bufs->att);
+        tensor_free(&layer_bufs->att_proj);
+        tensor_free(&layer_bufs->res_2);
+        tensor_free(&layer_bufs->ln_2);
+        tensor_free(&layer_bufs->ln_2_mean);
+        tensor_free(&layer_bufs->ln_2_rstd);
+        tensor_free(&layer_bufs->mlp_fc);
+        tensor_free(&layer_bufs->mlp_fc_gelu);
+        tensor_free(&layer_bufs->mlp_proj);
+        tensor_free(&layer_bufs->res_3);
     }
-    // No need to free individual tensors since they point into the contiguous block
+    tensor_free(&buffers->ln_f);
+    tensor_free(&buffers->ln_f_mean);
+    tensor_free(&buffers->ln_f_rstd);
+    tensor_free(&buffers->logits);
+    tensor_free(&buffers->probs);
+    tensor_free(&buffers->losses);
 }
 
 void forward(const int *d_input_tokens, int seq_len)
@@ -968,8 +734,35 @@ void gpt2_zero_grad(gpt2_t *grads) {
 }
 
 void zero_activation_grads(train_buffers_t *g_buffers) {
-    // Zero all activation gradients with a single memset call
-    cudaMemset(g_buffers->activations_memory, 0, g_buffers->num_activations * sizeof(float));
+    cudaMemset(g_buffers->encoded.data, 0, tensor_size(g_buffers->encoded) * sizeof(float));
+    
+    for (int i = 0; i < config.n_layer; i++) {
+        layer_buffers_t *g_layer = &g_buffers->blocks[i];
+        
+        cudaMemset(g_layer->ln_1.data, 0, tensor_size(g_layer->ln_1) * sizeof(float));
+        cudaMemset(g_layer->ln_1_mean.data, 0, tensor_size(g_layer->ln_1_mean) * sizeof(float));
+        cudaMemset(g_layer->ln_1_rstd.data, 0, tensor_size(g_layer->ln_1_rstd) * sizeof(float));
+        cudaMemset(g_layer->qkv.data, 0, tensor_size(g_layer->qkv) * sizeof(float));
+        cudaMemset(g_layer->atty.data, 0, tensor_size(g_layer->atty) * sizeof(float));
+        cudaMemset(g_layer->preatt.data, 0, tensor_size(g_layer->preatt) * sizeof(float));
+        cudaMemset(g_layer->att.data, 0, tensor_size(g_layer->att) * sizeof(float));
+        cudaMemset(g_layer->att_proj.data, 0, tensor_size(g_layer->att_proj) * sizeof(float));
+        cudaMemset(g_layer->res_2.data, 0, tensor_size(g_layer->res_2) * sizeof(float));
+        cudaMemset(g_layer->ln_2.data, 0, tensor_size(g_layer->ln_2) * sizeof(float));
+        cudaMemset(g_layer->ln_2_mean.data, 0, tensor_size(g_layer->ln_2_mean) * sizeof(float));
+        cudaMemset(g_layer->ln_2_rstd.data, 0, tensor_size(g_layer->ln_2_rstd) * sizeof(float));
+        cudaMemset(g_layer->mlp_fc.data, 0, tensor_size(g_layer->mlp_fc) * sizeof(float));
+        cudaMemset(g_layer->mlp_fc_gelu.data, 0, tensor_size(g_layer->mlp_fc_gelu) * sizeof(float));
+        cudaMemset(g_layer->mlp_proj.data, 0, tensor_size(g_layer->mlp_proj) * sizeof(float));
+        cudaMemset(g_layer->res_3.data, 0, tensor_size(g_layer->res_3) * sizeof(float));
+    }
+    
+    cudaMemset(g_buffers->ln_f.data, 0, tensor_size(g_buffers->ln_f) * sizeof(float));
+    cudaMemset(g_buffers->ln_f_mean.data, 0, tensor_size(g_buffers->ln_f_mean) * sizeof(float));
+    cudaMemset(g_buffers->ln_f_rstd.data, 0, tensor_size(g_buffers->ln_f_rstd) * sizeof(float));
+    cudaMemset(g_buffers->logits.data, 0, tensor_size(g_buffers->logits) * sizeof(float));
+    cudaMemset(g_buffers->probs.data, 0, tensor_size(g_buffers->probs) * sizeof(float));
+    cudaMemset(g_buffers->losses.data, 0, tensor_size(g_buffers->losses) * sizeof(float));
 }
 
 stream_t** schedule_instructions(int seq_len) {
@@ -1947,13 +1740,15 @@ void free_schedule(stream_t **d_streams_ptr) {
 }
  
 __global__ void megakernel(
-    int B,
+    config_t config,
  
-    float *params,
-    float *g_params,
+    gpt2_t *model,
+    gpt2_t *g_model,
  
-    float *acts,
-    float *g_acts,
+    train_buffers_t *buffers,
+    train_buffers_t *g_buffers,
+ 
+    adamw_state_t opt_state,
  
     int seq_len,
     const int *d_input_tokens,
@@ -1964,18 +1759,20 @@ __global__ void megakernel(
 ) {
     int sm_id = blockIdx.x;  // Each SM gets its own block
     stream_t *stream = streams[sm_id];
-    execute_stream(B, params, g_params, acts, g_acts, seq_len, d_input_tokens, d_target_tokens, bar, stream);
+    execute_stream(config, model, g_model, buffers, g_buffers, opt_state, seq_len, d_input_tokens, d_target_tokens, bar, stream);
 }
  
  
 __device__ void execute_stream(
-    int B,
+    config_t config,
  
-    float *params,
-    float *g_params,
+    gpt2_t *model,
+    gpt2_t *g_model,
  
-    float *acts,
-    float *g_acts,
+    train_buffers_t *buffers,
+    train_buffers_t *g_buffers,
+ 
+    adamw_state_t opt_state,
  
     int seq_len,
     const int *d_input_tokens,
@@ -1990,19 +1787,21 @@ __device__ void execute_stream(
  
     for (int i = 0; i < stream->n; i++) {
         instruction_t instr = stream->instructions[i];
-        execute_instruction(B, params, g_params, acts, g_acts, seq_len, d_input_tokens, d_target_tokens, bar, instr);
+        execute_instruction(config, model, g_model, buffers, g_buffers, opt_state, seq_len, d_input_tokens, d_target_tokens, bar, instr);
     }
 }
  
  
 __device__ void execute_instruction(
-    int B,
+    config_t config,
  
-    float *params,
-    float *g_params,
+    gpt2_t *model,
+    gpt2_t *g_model,
  
-    float *acts,
-    float *g_acts,
+    train_buffers_t *buffers,
+    train_buffers_t *g_buffers,
+ 
+    adamw_state_t opt_state,
  
     int seq_len,
     const int *d_input_tokens,
@@ -2011,9 +1810,12 @@ __device__ void execute_instruction(
     int *bar,
     instruction_t instr
 ) {
-    // Use compile-time constants where possible, runtime only for B, S, V
-    const int S = seq_len;
-    const int l = instr.layer;  // current layer index
+    int L = config.n_layer;
+    int B = config.batch_size;
+    int S = seq_len;
+    int h = config.n_embd;
+    int n_head = config.n_head;
+    int V = config.vocab_size;
  
     volatile int *vbar = (volatile int *)bar;
  
@@ -2022,319 +1824,259 @@ __device__ void execute_instruction(
  
     if (instr.op != 1) {
         if (threadIdx.x == 0) {
-            while (vbar[instr.bar_idx] < min(NUM_SM, instr.expected)) { }
+            // printf("SM %d waiting at barrier %d for op %d (expecting %d, actual %d)\n", blockIdx.x, instr.bar_idx, instr.op, min(NUM_SM, instr.expected), vbar[instr.bar_idx]);
+            while (vbar[instr.bar_idx] < min(NUM_SM, instr.expected)) {
+                // printf("[SPIN] SM %d waiting at barrier %d for op %d (expecting %d, actual %d)\n", blockIdx.x, instr.bar_idx, instr.op, min(NUM_SM, instr.expected), vbar[instr.bar_idx]);
+                // __nanosleep(10);
+            }
         }
+ 
         __syncthreads();
     }
  
-    // Use macros to compute pointers inline - reduces register pressure
     switch (instr.op) {
-        case 1: // Embedding forward
-            embedding_forward_device(
-                ACT_ENCODED(acts, B, S),
-                d_input_tokens,
-                PARAM_WTE(params),
-                PARAM_WPE(params),
-                S, H, VOCAB, MAXT, instr.b_x);
+        case 1: {
+            // OP 1: Embedding forward
+            embedding_forward_device(buffers->encoded.data, d_input_tokens, model->emb.wte.data, model->emb.wpe.data, S, h, V, config.n_positions, instr.b_x);
             break;
+        }
  
-        case 2: // LayerNorm 1
-            layernorm_forward_device(
-                ACT_LAYER(acts, B, S, l) + A_LN1(B, S),
-                (l == 0) ? ACT_ENCODED(acts, B, S) : ACT_LAYER(acts, B, S, l-1) + A_RES3(B, S),
-                PARAM_LAYER(params, l) + P_LN1_W,
-                PARAM_LAYER(params, l) + P_LN1_B,
-                ACT_LAYER(acts, B, S, l) + A_LN1_MEAN(B, S),
-                ACT_LAYER(acts, B, S, l) + A_LN1_RSTD(B, S),
-                S, H, instr.b_x);
-            break;
+        case 2: {
+            // OP 2: LayerNorm 1
  
-        case 3: // QKV projection
-            mlp_forward_device(
-                ACT_LAYER(acts, B, S, l) + A_QKV(B, S),
-                ACT_LAYER(acts, B, S, l) + A_LN1(B, S),
-                PARAM_LAYER(params, l) + P_QKV_W,
-                PARAM_LAYER(params, l) + P_QKV_B,
-                B, S, H, H * 3, instr.b_x, instr.b_y, shared_mem);
-            break;
  
-        case 4: // Attention
-            attention_forward_device(
-                ACT_LAYER(acts, B, S, l) + A_ATTY(B, S),
-                ACT_LAYER(acts, B, S, l) + A_PREATT(B, S),
-                ACT_LAYER(acts, B, S, l) + A_ATT(B, S),
-                ACT_LAYER(acts, B, S, l) + A_QKV(B, S),
-                B, S, N_HEAD, H, instr.b_x);
+            float *res = (instr.layer == 0) ? buffers->encoded.data : buffers->blocks[instr.layer - 1].res_3.data;
+            layernorm_forward_device(buffers->blocks[instr.layer].ln_1.data, res, model->h[instr.layer].ln_1.w.data, model->h[instr.layer].ln_1.b.data, buffers->blocks[instr.layer].ln_1_mean.data, buffers->blocks[instr.layer].ln_1_rstd.data, S, h, instr.b_x);
             break;
+        }
  
-        case 5: // Attention projection
-            mlp_forward_device(
-                ACT_LAYER(acts, B, S, l) + A_ATT_PROJ(B, S),
-                ACT_LAYER(acts, B, S, l) + A_ATTY(B, S),
-                PARAM_LAYER(params, l) + P_ATTN_PROJ_W,
-                PARAM_LAYER(params, l) + P_ATTN_PROJ_B,
-                B, S, H, H, instr.b_x, instr.b_y, shared_mem);
-            break;
+        case 3: {
+            // OP 3: QKV projection
  
-        case 6: // Residual 2
-            residual_forward_device(
-                ACT_LAYER(acts, B, S, l) + A_RES2(B, S),
-                ACT_LAYER(acts, B, S, l) + A_ATT_PROJ(B, S),
-                (l == 0) ? ACT_ENCODED(acts, B, S) : ACT_LAYER(acts, B, S, l-1) + A_RES3(B, S),
-                B, S, H, instr.b_x);
+            mlp_forward_device(buffers->blocks[instr.layer].qkv.data, buffers->blocks[instr.layer].ln_1.data, model->h[instr.layer].attn.qkv_w.data, model->h[instr.layer].attn.qkv_b.data, B, S, h, h * 3, instr.b_x, instr.b_y, shared_mem);
             break;
+        }
  
-        case 7: // LayerNorm 2
-            layernorm_forward_device(
-                ACT_LAYER(acts, B, S, l) + A_LN2(B, S),
-                ACT_LAYER(acts, B, S, l) + A_RES2(B, S),
-                PARAM_LAYER(params, l) + P_LN2_W,
-                PARAM_LAYER(params, l) + P_LN2_B,
-                ACT_LAYER(acts, B, S, l) + A_LN2_MEAN(B, S),
-                ACT_LAYER(acts, B, S, l) + A_LN2_RSTD(B, S),
-                S, H, instr.b_x);
-            break;
+        case 4: {
+            // OP 4: Attention
  
-        case 8: // MLP FC
-            mlp_forward_device(
-                ACT_LAYER(acts, B, S, l) + A_MLP_FC(B, S),
-                ACT_LAYER(acts, B, S, l) + A_LN2(B, S),
-                PARAM_LAYER(params, l) + P_FC_W,
-                PARAM_LAYER(params, l) + P_FC_B,
-                B, S, H, H * 4, instr.b_x, instr.b_y, shared_mem);
+            attention_forward_device(buffers->blocks[instr.layer].atty.data, buffers->blocks[instr.layer].preatt.data, buffers->blocks[instr.layer].att.data, buffers->blocks[instr.layer].qkv.data, B, S, n_head, h, instr.b_x);
             break;
+        }
  
-        case 9: // GELU
-            gelu_forward_device(
-                ACT_LAYER(acts, B, S, l) + A_MLP_GELU(B, S),
-                ACT_LAYER(acts, B, S, l) + A_MLP_FC(B, S),
-                B, S, H * 4, instr.b_x);
-            break;
+        case 5: {
+            // OP 5: Attention projection
  
-        case 10: // MLP projection
-            mlp_forward_device(
-                ACT_LAYER(acts, B, S, l) + A_MLP_PROJ(B, S),
-                ACT_LAYER(acts, B, S, l) + A_MLP_GELU(B, S),
-                PARAM_LAYER(params, l) + P_MLP_PROJ_W,
-                PARAM_LAYER(params, l) + P_MLP_PROJ_B,
-                B, S, H * 4, H, instr.b_x, instr.b_y, shared_mem);
+            mlp_forward_device(buffers->blocks[instr.layer].att_proj.data, buffers->blocks[instr.layer].atty.data, model->h[instr.layer].attn.proj_w.data, model->h[instr.layer].attn.proj_b.data, B, S, h, h, instr.b_x, instr.b_y, shared_mem);
             break;
+        }
  
-        case 11: // Residual 3
-            residual_forward_device(
-                ACT_LAYER(acts, B, S, l) + A_RES3(B, S),
-                ACT_LAYER(acts, B, S, l) + A_MLP_PROJ(B, S),
-                ACT_LAYER(acts, B, S, l) + A_RES2(B, S),
-                B, S, H, instr.b_x);
-            break;
+        case 6: {
+            // OP 6: Residual 2
  
-        case 12: // Final LayerNorm
-            layernorm_forward_device(
-                ACT_LN_F(acts, B, S),
-                ACT_LAYER(acts, B, S, N_LAYER-1) + A_RES3(B, S),
-                PARAM_LN_F_W(params),
-                PARAM_LN_F_B(params),
-                ACT_LN_F_MEAN(acts, B, S),
-                ACT_LN_F_RSTD(acts, B, S),
-                S, H, instr.b_x);
+            float *res = (instr.layer == 0) ? buffers->encoded.data : buffers->blocks[instr.layer - 1].res_3.data;
+            residual_forward_device(buffers->blocks[instr.layer].res_2.data, buffers->blocks[instr.layer].att_proj.data, res, B, S, h, instr.b_x);
             break;
+        }
  
-        case 13: // Logits
-            mlp_forward_device(
-                ACT_LOGITS(acts, B, S),
-                ACT_LN_F(acts, B, S),
-                PARAM_WTE(params),
-                NULL,
-                B, S, H, VOCAB, instr.b_x, instr.b_y, shared_mem);
-            break;
+        case 7: {
+            // OP 7: LayerNorm 2
  
-        case 14: // Softmax
-            softmax_forward_device(
-                ACT_PROBS(acts, B, S, VOCAB),
-                ACT_LOGITS(acts, B, S),
-                B, S, VOCAB, instr.b_x, shared_mem);
+            layernorm_forward_device(buffers->blocks[instr.layer].ln_2.data, buffers->blocks[instr.layer].res_2.data, model->h[instr.layer].ln_2.w.data, model->h[instr.layer].ln_2.b.data, buffers->blocks[instr.layer].ln_2_mean.data, buffers->blocks[instr.layer].ln_2_rstd.data, S, h, instr.b_x);
             break;
+        }
  
-        case 15: // Cross-entropy forward
-            cross_entropy_forward_device(
-                ACT_LOSSES(acts, B, S, VOCAB),
-                ACT_PROBS(acts, B, S, VOCAB),
-                d_target_tokens, B, S, VOCAB, instr.b_x);
-            break;
+        case 8: {
+            // OP 8: MLP FC
  
-        case 16: // Cross-entropy backward
-            cross_entropy_backward_device(
-                ACT_LOGITS(g_acts, B, S),
-                ACT_PROBS(acts, B, S, VOCAB),
-                d_target_tokens, B, S, VOCAB, instr.b_x);
+            mlp_forward_device(buffers->blocks[instr.layer].mlp_fc.data, buffers->blocks[instr.layer].ln_2.data, model->h[instr.layer].mlp.fc_w.data, model->h[instr.layer].mlp.fc_b.data, B, S, h, h * 4, instr.b_x, instr.b_y, shared_mem);
             break;
+        }
  
-        case 17: // Logits backward (input gradient)
-            mlp_backward_input_device(
-                ACT_LN_F(g_acts, B, S),
-                ACT_LOGITS(g_acts, B, S),
-                PARAM_WTE(params),
-                B, S, H, VOCAB, instr.b_x, instr.b_y, shared_mem);
-            break;
+        case 9: {
+            // OP 9: GELU
  
-        case 18: // Embedding weight gradient
-            mlp_backward_weight_device(
-                PARAM_WTE(g_params),
-                NULL,
-                ACT_LOGITS(g_acts, B, S),
-                ACT_LN_F(acts, B, S),
-                B, S, H, VOCAB, instr.b_x, instr.b_y, shared_mem);
+            gelu_forward_device(buffers->blocks[instr.layer].mlp_fc_gelu.data, buffers->blocks[instr.layer].mlp_fc.data, B, S, h * 4, instr.b_x);
             break;
+        }
  
-        case 19: // Final LayerNorm backward
-            layernorm_backward_device(
-                ACT_LAYER(g_acts, B, S, N_LAYER-1) + A_RES3(B, S),
-                PARAM_LN_F_W(g_params),
-                PARAM_LN_F_B(g_params),
-                ACT_LN_F(g_acts, B, S),
-                ACT_LAYER(acts, B, S, N_LAYER-1) + A_RES3(B, S),
-                PARAM_LN_F_W(params),
-                ACT_LN_F_MEAN(acts, B, S),
-                ACT_LN_F_RSTD(acts, B, S),
-                B, S, H, instr.b_x);
-            break;
+        case 10: {
+            // OP 10: MLP projection
  
-        case 20: // Residual backward (res_3)
-            residual_backward_device(
-                ACT_LAYER(g_acts, B, S, l) + A_RES2(B, S),
-                ACT_LAYER(g_acts, B, S, l) + A_MLP_PROJ(B, S),
-                ACT_LAYER(g_acts, B, S, l) + A_RES3(B, S),
-                B * S * H, instr.b_x);
+            mlp_forward_device(buffers->blocks[instr.layer].mlp_proj.data, buffers->blocks[instr.layer].mlp_fc_gelu.data, model->h[instr.layer].mlp.proj_w.data, model->h[instr.layer].mlp.proj_b.data, B, S, h * 4, h, instr.b_x, instr.b_y, shared_mem);
             break;
+        }
  
-        case 21: // MLP projection backward input
-            mlp_backward_input_device(
-                ACT_LAYER(g_acts, B, S, l) + A_MLP_GELU(B, S),
-                ACT_LAYER(g_acts, B, S, l) + A_MLP_PROJ(B, S),
-                PARAM_LAYER(params, l) + P_MLP_PROJ_W,
-                B, S, H * 4, H, instr.b_x, instr.b_y, shared_mem);
-            break;
+        case 11: {
+            // OP 11: Residual 3
  
-        case 22: // MLP projection backward weight
-            mlp_backward_weight_device(
-                PARAM_LAYER(g_params, l) + P_MLP_PROJ_W,
-                PARAM_LAYER(g_params, l) + P_MLP_PROJ_B,
-                ACT_LAYER(g_acts, B, S, l) + A_MLP_PROJ(B, S),
-                ACT_LAYER(acts, B, S, l) + A_MLP_GELU(B, S),
-                B, S, H * 4, H, instr.b_x, instr.b_y, shared_mem);
-            break;
  
-        case 23: // GELU backward
-            gelu_backward_device(
-                ACT_LAYER(g_acts, B, S, l) + A_MLP_FC(B, S),
-                ACT_LAYER(acts, B, S, l) + A_MLP_FC(B, S),
-                ACT_LAYER(g_acts, B, S, l) + A_MLP_GELU(B, S),
-                B * S * 4 * H, instr.b_x);
+            residual_forward_device(buffers->blocks[instr.layer].res_3.data, buffers->blocks[instr.layer].mlp_proj.data, buffers->blocks[instr.layer].res_2.data, B, S, h, instr.b_x);
             break;
+        }
  
-        case 24: // MLP FC backward input
-            mlp_backward_input_device(
-                ACT_LAYER(g_acts, B, S, l) + A_LN2(B, S),
-                ACT_LAYER(g_acts, B, S, l) + A_MLP_FC(B, S),
-                PARAM_LAYER(params, l) + P_FC_W,
-                B, S, H, H * 4, instr.b_x, instr.b_y, shared_mem);
-            break;
+        case 12: {
+            // OP 12: Final LayerNorm
  
-        case 25: // MLP FC backward weight
-            mlp_backward_weight_device(
-                PARAM_LAYER(g_params, l) + P_FC_W,
-                PARAM_LAYER(g_params, l) + P_FC_B,
-                ACT_LAYER(g_acts, B, S, l) + A_MLP_FC(B, S),
-                ACT_LAYER(acts, B, S, l) + A_LN2(B, S),
-                B, S, H, H * 4, instr.b_x, instr.b_y, shared_mem);
-            break;
  
-        case 26: // LayerNorm 2 backward
-            layernorm_backward_device(
-                ACT_LAYER(g_acts, B, S, l) + A_RES2(B, S),
-                PARAM_LAYER(g_params, l) + P_LN2_W,
-                PARAM_LAYER(g_params, l) + P_LN2_B,
-                ACT_LAYER(g_acts, B, S, l) + A_LN2(B, S),
-                ACT_LAYER(acts, B, S, l) + A_RES2(B, S),
-                PARAM_LAYER(params, l) + P_LN2_W,
-                ACT_LAYER(acts, B, S, l) + A_LN2_MEAN(B, S),
-                ACT_LAYER(acts, B, S, l) + A_LN2_RSTD(B, S),
-                B, S, H, instr.b_x);
+            layernorm_forward_device(buffers->ln_f.data, buffers->blocks[L - 1].res_3.data, model->ln_f.w.data, model->ln_f.b.data, buffers->ln_f_mean.data, buffers->ln_f_rstd.data, S, h, instr.b_x);
             break;
+        }
  
-        case 27: // Residual backward (res_2)
-            residual_backward_device(
-                (l == 0) ? ACT_ENCODED(g_acts, B, S) : ACT_LAYER(g_acts, B, S, l-1) + A_RES3(B, S),
-                ACT_LAYER(g_acts, B, S, l) + A_ATT_PROJ(B, S),
-                ACT_LAYER(g_acts, B, S, l) + A_RES2(B, S),
-                B * S * H, instr.b_x);
-            break;
+        case 13: {
+            // OP 13: Logits
  
-        case 28: // Attention projection backward input
-            mlp_backward_input_device(
-                ACT_LAYER(g_acts, B, S, l) + A_ATTY(B, S),
-                ACT_LAYER(g_acts, B, S, l) + A_ATT_PROJ(B, S),
-                PARAM_LAYER(params, l) + P_ATTN_PROJ_W,
-                B, S, H, H, instr.b_x, instr.b_y, shared_mem);
+            mlp_forward_device(buffers->logits.data, buffers->ln_f.data, model->emb.wte.data, NULL, B, S, h, V, instr.b_x, instr.b_y, shared_mem);
             break;
+        }
  
-        case 29: // Attention projection backward weight
-            mlp_backward_weight_device(
-                PARAM_LAYER(g_params, l) + P_ATTN_PROJ_W,
-                PARAM_LAYER(g_params, l) + P_ATTN_PROJ_B,
-                ACT_LAYER(g_acts, B, S, l) + A_ATT_PROJ(B, S),
-                ACT_LAYER(acts, B, S, l) + A_ATTY(B, S),
-                B, S, H, H, instr.b_x, instr.b_y, shared_mem);
-            break;
+        case 14: {
+            // OP 14: Softmax
  
-        case 30: // Attention backward
-            attention_backward_device(
-                ACT_LAYER(g_acts, B, S, l) + A_QKV(B, S),
-                ACT_LAYER(g_acts, B, S, l) + A_PREATT(B, S),
-                ACT_LAYER(g_acts, B, S, l) + A_ATT(B, S),
-                ACT_LAYER(g_acts, B, S, l) + A_ATTY(B, S),
-                ACT_LAYER(acts, B, S, l) + A_QKV(B, S),
-                ACT_LAYER(acts, B, S, l) + A_ATT(B, S),
-                B, S, H, N_HEAD, instr.b_x);
+            softmax_forward_device(buffers->probs.data, buffers->logits.data, B, S, V, instr.b_x, shared_mem);
             break;
+        }
  
-        case 31: // QKV backward input
-            mlp_backward_input_device(
-                ACT_LAYER(g_acts, B, S, l) + A_LN1(B, S),
-                ACT_LAYER(g_acts, B, S, l) + A_QKV(B, S),
-                PARAM_LAYER(params, l) + P_QKV_W,
-                B, S, H, H * 3, instr.b_x, instr.b_y, shared_mem);
-            break;
+        case 15: {
+            // OP 15: Cross-entropy forward
  
-        case 32: // QKV backward weight
-            mlp_backward_weight_device(
-                PARAM_LAYER(g_params, l) + P_QKV_W,
-                PARAM_LAYER(g_params, l) + P_QKV_B,
-                ACT_LAYER(g_acts, B, S, l) + A_QKV(B, S),
-                ACT_LAYER(acts, B, S, l) + A_LN1(B, S),
-                B, S, H, H * 3, instr.b_x, instr.b_y, shared_mem);
+            cross_entropy_forward_device(buffers->losses.data, buffers->probs.data, d_target_tokens, B, S, V, instr.b_x);
             break;
+        }
  
-        case 33: // LayerNorm 1 backward
-            layernorm_backward_device(
-                (l == 0) ? ACT_ENCODED(g_acts, B, S) : ACT_LAYER(g_acts, B, S, l-1) + A_RES3(B, S),
-                PARAM_LAYER(g_params, l) + P_LN1_W,
-                PARAM_LAYER(g_params, l) + P_LN1_B,
-                ACT_LAYER(g_acts, B, S, l) + A_LN1(B, S),
-                (l == 0) ? ACT_ENCODED(acts, B, S) : ACT_LAYER(acts, B, S, l-1) + A_RES3(B, S),
-                PARAM_LAYER(params, l) + P_LN1_W,
-                ACT_LAYER(acts, B, S, l) + A_LN1_MEAN(B, S),
-                ACT_LAYER(acts, B, S, l) + A_LN1_RSTD(B, S),
-                B, S, H, instr.b_x);
-            break;
+        case 16: {
+            // OP 16: Cross-entropy backward
  
-        case 34: // Embedding backward
-            embedding_backward_device(
-                PARAM_WTE(g_params),
-                PARAM_WPE(g_params),
-                ACT_ENCODED(g_acts, B, S),
-                d_input_tokens, B, S, H, instr.b_x);
+            cross_entropy_backward_device(g_buffers->logits.data, buffers->probs.data, d_target_tokens, B, S, V, instr.b_x);
             break;
+        }
+ 
+        case 17: {
+            // OP 17: Logits backward (input gradient)
+ 
+            mlp_backward_input_device(g_buffers->ln_f.data, g_buffers->logits.data, model->emb.wte.data, B, S, h, V, instr.b_x, instr.b_y, shared_mem);
+            break;
+        }
+ 
+        case 18: {
+            // OP 18: Embedding weight gradient
+ 
+            mlp_backward_weight_device(g_model->emb.wte.data, NULL, g_buffers->logits.data, buffers->ln_f.data, B, S, h, V, instr.b_x, instr.b_y, shared_mem);
+            break;
+        }
+ 
+        case 19: {
+            // OP 19: Final LayerNorm backward
+ 
+            layernorm_backward_device(g_buffers->blocks[L - 1].res_3.data, g_model->ln_f.w.data, g_model->ln_f.b.data, g_buffers->ln_f.data, buffers->blocks[L - 1].res_3.data, model->ln_f.w.data, buffers->ln_f_mean.data, buffers->ln_f_rstd.data, B, S, h, instr.b_x);
+            break;
+        }
+ 
+        case 20: {
+            // OP 20: Residual backward (res_3)
+            residual_backward_device(g_buffers->blocks[instr.layer].res_2.data, g_buffers->blocks[instr.layer].mlp_proj.data, g_buffers->blocks[instr.layer].res_3.data, B * S * h, instr.b_x);
+            break;
+        }
+ 
+        case 21: {
+            // OP 21: MLP projection backward input
+ 
+            mlp_backward_input_device(g_buffers->blocks[instr.layer].mlp_fc_gelu.data, g_buffers->blocks[instr.layer].mlp_proj.data, model->h[instr.layer].mlp.proj_w.data, B, S, h * 4, h, instr.b_x, instr.b_y, shared_mem);
+            break;
+        }
+ 
+        case 22: {
+            // OP 22: MLP projection backward weight
+            mlp_backward_weight_device(g_model->h[instr.layer].mlp.proj_w.data, g_model->h[instr.layer].mlp.proj_b.data, g_buffers->blocks[instr.layer].mlp_proj.data, buffers->blocks[instr.layer].mlp_fc_gelu.data, B, S, h * 4, h, instr.b_x, instr.b_y, shared_mem);
+            break;
+        }
+ 
+        case 23: {
+            // OP 23: GELU backward
+ 
+            gelu_backward_device(g_buffers->blocks[instr.layer].mlp_fc.data, buffers->blocks[instr.layer].mlp_fc.data, g_buffers->blocks[instr.layer].mlp_fc_gelu.data, B * S * 4 * h, instr.b_x);
+            break;
+        }
+ 
+        case 24: {
+            // OP 24: MLP FC backward input
+            mlp_backward_input_device(g_buffers->blocks[instr.layer].ln_2.data, g_buffers->blocks[instr.layer].mlp_fc.data, model->h[instr.layer].mlp.fc_w.data, B, S, h, h * 4, instr.b_x, instr.b_y, shared_mem);
+            break;
+        }
+ 
+        case 25: {
+            // OP 25: MLP FC backward weight
+ 
+            mlp_backward_weight_device(g_model->h[instr.layer].mlp.fc_w.data, g_model->h[instr.layer].mlp.fc_b.data, g_buffers->blocks[instr.layer].mlp_fc.data, buffers->blocks[instr.layer].ln_2.data, B, S, h, h * 4, instr.b_x, instr.b_y, shared_mem);
+            break;
+        }
+ 
+        case 26: {
+            // OP 26: LayerNorm 2 backward
+ 
+            layernorm_backward_device(g_buffers->blocks[instr.layer].res_2.data, g_model->h[instr.layer].ln_2.w.data, g_model->h[instr.layer].ln_2.b.data, g_buffers->blocks[instr.layer].ln_2.data, buffers->blocks[instr.layer].res_2.data, model->h[instr.layer].ln_2.w.data, buffers->blocks[instr.layer].ln_2_mean.data, buffers->blocks[instr.layer].ln_2_rstd.data, B, S, h, instr.b_x);
+            break;
+        }
+ 
+        case 27: {
+            // OP 27: Residual backward (res_2)
+ 
+            float *g_res = (instr.layer == 0) ? g_buffers->encoded.data : g_buffers->blocks[instr.layer - 1].res_3.data;
+            residual_backward_device(g_res, g_buffers->blocks[instr.layer].att_proj.data, g_buffers->blocks[instr.layer].res_2.data, B * S * h, instr.b_x);
+            break;
+        }
+ 
+        case 28: {
+            // OP 28: Attention projection backward input
+ 
+            mlp_backward_input_device(g_buffers->blocks[instr.layer].atty.data, g_buffers->blocks[instr.layer].att_proj.data, model->h[instr.layer].attn.proj_w.data, B, S, h, h, instr.b_x, instr.b_y, shared_mem);
+            break;
+        }
+ 
+        case 29: {
+            // OP 29: Attention projection backward weight
+ 
+            mlp_backward_weight_device(g_model->h[instr.layer].attn.proj_w.data, g_model->h[instr.layer].attn.proj_b.data, g_buffers->blocks[instr.layer].att_proj.data, buffers->blocks[instr.layer].atty.data, B, S, h, h, instr.b_x, instr.b_y, shared_mem);
+            break;
+        }
+ 
+        case 30: {
+            // OP 30: Attention backward
+ 
+            attention_backward_device(g_buffers->blocks[instr.layer].qkv.data, g_buffers->blocks[instr.layer].preatt.data, g_buffers->blocks[instr.layer].att.data, g_buffers->blocks[instr.layer].atty.data, buffers->blocks[instr.layer].qkv.data, buffers->blocks[instr.layer].att.data, B, S, h, n_head, instr.b_x);
+            break;
+        }
+ 
+        case 31: {
+            // OP 31: QKV backward input
+ 
+            mlp_backward_input_device(g_buffers->blocks[instr.layer].ln_1.data, g_buffers->blocks[instr.layer].qkv.data, model->h[instr.layer].attn.qkv_w.data, B, S, h, h * 3, instr.b_x, instr.b_y, shared_mem);
+            break;
+        }
+ 
+        case 32: {
+            // OP 32: QKV backward weight
+ 
+            mlp_backward_weight_device(g_model->h[instr.layer].attn.qkv_w.data, g_model->h[instr.layer].attn.qkv_b.data, g_buffers->blocks[instr.layer].qkv.data, buffers->blocks[instr.layer].ln_1.data, B, S, h, h * 3, instr.b_x, instr.b_y, shared_mem);
+            break;
+        }
+ 
+        case 33: {
+            // OP 33: LayerNorm 1 backward
+ 
+            float *g_res = (instr.layer == 0) ? g_buffers->encoded.data : g_buffers->blocks[instr.layer - 1].res_3.data;
+            float *res = (instr.layer == 0) ? buffers->encoded.data : buffers->blocks[instr.layer - 1].res_3.data;
+ 
+            layernorm_backward_device(g_res, g_model->h[instr.layer].ln_1.w.data, g_model->h[instr.layer].ln_1.b.data, g_buffers->blocks[instr.layer].ln_1.data, res, model->h[instr.layer].ln_1.w.data, buffers->blocks[instr.layer].ln_1_mean.data, buffers->blocks[instr.layer].ln_1_rstd.data, B, S, h, instr.b_x);
+            break;
+        }
+ 
+        case 34: {
+            // OP 34: Embedding backward
+ 
+            embedding_backward_device(g_model->emb.wte.data, g_model->emb.wpe.data, g_buffers->encoded.data, d_input_tokens, B, S, h, instr.b_x);
+            break;
+        }
  
         default:
             break;
@@ -2342,7 +2084,9 @@ __device__ void execute_instruction(
  
     __syncthreads();
 
+    // Only the instructions marked with `inc` perform the atomic increment.
     if (instr.inc && threadIdx.x == 0) {
+        // printf("[INC]\n");
         atomicAdd(&bar[instr.bar_idx + 1], 1);
     }
 }
