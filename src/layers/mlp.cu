@@ -12,7 +12,7 @@
 // shared_mem: pointer to shared memory (size: 2 * TILE_SIZE * TILE_SIZE * sizeof(float))
 // Launch with: dim3 grid((output_dim + TILE_SIZE - 1) / TILE_SIZE, (batch_size * seq_len + TILE_SIZE - 1) / TILE_SIZE);
 //              dim3 block(TILE_SIZE * TILE_SIZE);
-__device__ void mlp_forward_device(float *out, const float *input, const float *w, const float *b, 
+__device__ __noinline__ void mlp_forward_device(float *out, const float *input, const float *w, const float *b, 
                                     int batch_size, int seq_len, int input_dim, int output_dim,
                                     int blockIdx_x, int blockIdx_y, float *shared_mem) {
     // Use provided shared memory for tiling
@@ -135,7 +135,7 @@ __global__ void mlp_forward(float *out, const float *input, const float *w, cons
 // Computes: g_input = g_out @ weight^T
 // Launch with: dim3 grid((input_dim + TILE_SIZE - 1) / TILE_SIZE, (batch_size * seq_len + TILE_SIZE - 1) / TILE_SIZE);
 //              dim3 block(TILE_SIZE * TILE_SIZE);
-__device__ void mlp_backward_input_device(float *g_input, const float *g_out, const float *weight, 
+__device__ __noinline__ void mlp_backward_input_device(float *g_input, const float *g_out, const float *weight, 
                                           int batch_size, int seq_len, int input_dim, int output_dim,
                                           int blockIdx_x, int blockIdx_y, float *shared_mem) {
     float (*s_g_out)[TILE_SIZE] = (float (*)[TILE_SIZE])shared_mem;
@@ -249,7 +249,7 @@ __global__ void mlp_backward_input(float *g_input, const float *g_out, const flo
 // Computes: g_weight = input^T @ g_out
 // Launch with: dim3 grid((output_dim + TILE_SIZE - 1) / TILE_SIZE, (input_dim + TILE_SIZE - 1) / TILE_SIZE);
 //              dim3 block(TILE_SIZE * TILE_SIZE);
-__device__ void mlp_backward_weight_device(float *g_weight, float *g_bias, const float *g_out, const float *input, 
+__device__ __noinline__ void mlp_backward_weight_device(float *g_weight, float *g_bias, const float *g_out, const float *input, 
                                            int batch_size, int seq_len, int input_dim, int output_dim,
                                            int blockIdx_x, int blockIdx_y, float *shared_mem) {
     float (*s_input)[TILE_SIZE] = (float (*)[TILE_SIZE])shared_mem;

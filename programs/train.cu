@@ -156,8 +156,6 @@ __global__ void megakernel(
     train_buffers_t *buffers,
     train_buffers_t *g_buffers,
 
-    adamw_state_t opt_state,
-
     int seq_len,
     const int *d_input_tokens,
     const int *d_target_tokens,
@@ -175,8 +173,6 @@ __device__ void execute_stream(
     train_buffers_t *buffers,
     train_buffers_t *g_buffers,
 
-    adamw_state_t opt_state,
-
     int seq_len,
     const int *d_input_tokens,
     const int *d_target_tokens,
@@ -193,8 +189,6 @@ __device__ void execute_instruction(
 
     train_buffers_t *buffers,
     train_buffers_t *g_buffers,
-
-    adamw_state_t opt_state,
 
     int seq_len,
     const int *d_input_tokens,
@@ -324,7 +318,6 @@ int main()
         d_g_model,
         d_buffers,
         d_g_buffers,
-        opt_state,
         seq_len,
         d_input_tokens,
         d_target_tokens,
@@ -1734,8 +1727,6 @@ __global__ void megakernel(
     train_buffers_t *buffers,
     train_buffers_t *g_buffers,
 
-    adamw_state_t opt_state,
-
     int seq_len,
     const int *d_input_tokens,
     const int *d_target_tokens,
@@ -1745,7 +1736,7 @@ __global__ void megakernel(
 ) {
     int sm_id = blockIdx.x;  // Each SM gets its own block
     stream_t *stream = streams[sm_id];
-    execute_stream(config, model, g_model, buffers, g_buffers, opt_state, seq_len, d_input_tokens, d_target_tokens, bar, stream);
+    execute_stream(config, model, g_model, buffers, g_buffers, seq_len, d_input_tokens, d_target_tokens, bar, stream);
 }
 
 __device__ void execute_stream(
@@ -1756,8 +1747,6 @@ __device__ void execute_stream(
 
     train_buffers_t *buffers,
     train_buffers_t *g_buffers,
-
-    adamw_state_t opt_state,
 
     int seq_len,
     const int *d_input_tokens,
@@ -1771,7 +1760,7 @@ __device__ void execute_stream(
     // }
     for (int i = 0; i < stream->n; i++) {
         instruction_t instr = stream->instructions[i];
-        execute_instruction(config, model, g_model, buffers, g_buffers, opt_state, seq_len, d_input_tokens, d_target_tokens, bar, instr);
+        execute_instruction(config, model, g_model, buffers, g_buffers, seq_len, d_input_tokens, d_target_tokens, bar, instr);
     }
 }
 
@@ -1783,8 +1772,6 @@ __device__ void execute_instruction(
 
     train_buffers_t *buffers,
     train_buffers_t *g_buffers,
-
-    adamw_state_t opt_state,
 
     int seq_len,
     const int *d_input_tokens,

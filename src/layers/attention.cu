@@ -11,7 +11,7 @@
 // preatt: [B, NH, T, T]
 // att: [B, NH, T, T]
 // inp: [B, T, 3*C] where Q,K,V are concatenated
-__device__ void attention_forward_device(float* out, float* preatt, float* att,
+__device__ __noinline__ void attention_forward_device(float* out, float* preatt, float* att,
                                          const float* inp,
                                          int B, int T, int NH, int C,
                                          int blockIdx_x) {
@@ -178,7 +178,7 @@ __global__ void attention_forward(float* out, float* preatt, float* att,
 // g_out: [B, T, C] gradients from output
 // inp: [B, T, 3*C] input Q,K,V from forward pass
 // att: [B, NH, T, T] attention weights from forward pass
-__device__ void attention_backward_device(float* g_inp, float* g_preatt, float* g_att,
+__device__ __noinline__ void attention_backward_device(float* g_inp, float* g_preatt, float* g_att,
                                    const float* g_out, const float* inp, const float* att,
                                    int B, int T, int C, int NH,
                                    int blockIdx_x) {

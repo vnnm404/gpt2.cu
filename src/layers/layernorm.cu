@@ -7,7 +7,7 @@
 // input: [batch_size, seq_len, n_embd]
 // gamma: [n_embd]
 // beta: [n_embd]
-__device__ void layernorm_forward_device(float *out, float *input, float *weight, float *bias, float *ln_mean, float *ln_rstd, 
+__device__ __noinline__ void layernorm_forward_device(float *out, float *input, float *weight, float *bias, float *ln_mean, float *ln_rstd, 
                                          int seq_len, int n_embd,
                                          int blockIdx_x) {
     int batch_idx = blockIdx_x;
@@ -104,7 +104,7 @@ __global__ void layernorm_forward(float *out, float *input, float *weight, float
 // ln_mean: [batch_size, seq_len]
 // ln_rstd: [batch_size, seq_len]
 // weight: [n_embd]
-__device__ void layernorm_backward_device(float *g_input, float *g_weight, float *g_bias, const float *g_out, const float *input, const float *weight, const float *ln_mean, const float *ln_rstd, 
+__device__ __noinline__ void layernorm_backward_device(float *g_input, float *g_weight, float *g_bias, const float *g_out, const float *input, const float *weight, const float *ln_mean, const float *ln_rstd, 
                                           int batch_size, int seq_len, int n_embd,
                                           int blockIdx_x) {
     int batch_idx = blockIdx_x;
