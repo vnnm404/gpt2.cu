@@ -2,8 +2,6 @@
 
 #include "gpt2/layers/mlp.h"
 
-#define TILE_SIZE 32
-
 // Device function for MLP forward pass - Megakernel compatible
 // out: [batch_size, seq_len, output_dim]
 // input: [batch_size, seq_len, input_dim]
