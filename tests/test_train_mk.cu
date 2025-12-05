@@ -1830,6 +1830,13 @@ __device__ void execute_instruction(
     int h = MK_N_EMBD;
     int n_head = MK_N_HEAD;
     int V = MK_VOCAB_SIZE;
+
+    int start_b_x = instr.start_b_x;
+    int start_b_y = instr.start_b_y;
+    int end_b_x = instr.end_b_x; 
+    int end_b_y = instr.end_b_y;
+    int op = instr.op;
+    int expected = instr.expected;
  
     volatile int *vbar = (volatile int *)bar;
  
@@ -1838,9 +1845,8 @@ __device__ void execute_instruction(
  
     if (instr.op != 1) {
         if (threadIdx.x == 0) {
-            // printf("SM %d waiting at barrier %d for op %d (expecting %d, actual %d)\n", blockIdx.x, instr.bar_idx, instr.op, min(NUM_SM, instr.expected), vbar[instr.bar_idx]);
-            while (vbar[instr.bar_idx] < min(NUM_SM, instr.expected)) {
-                // printf("[SPIN] SM %d waiting at barrier %d for op %d (expecting %d, actual %d)\n", blockIdx.x, instr.bar_idx, instr.op, min(NUM_SM, instr.expected), vbar[instr.bar_idx]);
+            int exp = min(NUM_SM, expected);
+            while (vbar[instr.bar_idx] < exp) {
                 // __nanosleep(10);
             }
         }
@@ -1848,10 +1854,10 @@ __device__ void execute_instruction(
         __syncthreads();
     }
  
-    switch (instr.op) {
+    switch (op) {
         case 1: {
             // OP 1: Embedding forward
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 embedding_forward_device(MK_ACT_ENCODED(acts), d_input_tokens, MK_WTE(params), MK_WPE(params), S, h, V, MK_N_POSITIONS, b_x);
             }
             break;
@@ -1860,7 +1866,7 @@ __device__ void execute_instruction(
         case 2: {
             // OP 2: LayerNorm 1
             float *res = (instr.layer == 0) ? MK_ACT_ENCODED(acts) : MK_ACT_RES3(acts, instr.layer - 1);
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 layernorm_forward_device(MK_ACT_LN1(acts, instr.layer), res, MK_LN1_W(params, instr.layer), MK_LN1_B(params, instr.layer), MK_ACT_LN1_MEAN(acts, instr.layer), MK_ACT_LN1_RSTD(acts, instr.layer), S, h, b_x);
             }
             break;
@@ -1870,8 +1876,8 @@ __device__ void execute_instruction(
             // OP 3: QKV projection
             dim3 grid = MLP_FORWARD_GRID(h * 3, B, S);
             int num_blocks_x = grid.x;
-            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
-            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
             for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
                 int b_y = linear_idx / num_blocks_x;
                 int b_x = linear_idx % num_blocks_x;
@@ -1882,7 +1888,7 @@ __device__ void execute_instruction(
  
         case 4: {
             // OP 4: Attention
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 attention_forward_device(MK_ACT_ATTY(acts, instr.layer), MK_ACT_PREATT(acts, instr.layer), MK_ACT_ATT(acts, instr.layer), MK_ACT_QKV(acts, instr.layer), B, S, n_head, h, b_x);
             }
             break;
@@ -1892,8 +1898,8 @@ __device__ void execute_instruction(
             // OP 5: Attention projection
             dim3 grid = MLP_FORWARD_GRID(h, B, S);
             int num_blocks_x = grid.x;
-            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
-            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
             for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
                 int b_y = linear_idx / num_blocks_x;
                 int b_x = linear_idx % num_blocks_x;
@@ -1905,7 +1911,7 @@ __device__ void execute_instruction(
         case 6: {
             // OP 6: Residual 2
             float *res = (instr.layer == 0) ? MK_ACT_ENCODED(acts) : MK_ACT_RES3(acts, instr.layer - 1);
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 residual_forward_device(MK_ACT_RES2(acts, instr.layer), MK_ACT_ATT_PROJ(acts, instr.layer), res, B, S, h, b_x);
             }
             break;
@@ -1913,7 +1919,7 @@ __device__ void execute_instruction(
  
         case 7: {
             // OP 7: LayerNorm 2
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 layernorm_forward_device(MK_ACT_LN2(acts, instr.layer), MK_ACT_RES2(acts, instr.layer), MK_LN2_W(params, instr.layer), MK_LN2_B(params, instr.layer), MK_ACT_LN2_MEAN(acts, instr.layer), MK_ACT_LN2_RSTD(acts, instr.layer), S, h, b_x);
             }
             break;
@@ -1923,8 +1929,8 @@ __device__ void execute_instruction(
             // OP 8: MLP FC
             dim3 grid = MLP_FORWARD_GRID(h * 4, B, S);
             int num_blocks_x = grid.x;
-            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
-            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
             for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
                 int b_y = linear_idx / num_blocks_x;
                 int b_x = linear_idx % num_blocks_x;
@@ -1935,7 +1941,7 @@ __device__ void execute_instruction(
  
         case 9: {
             // OP 9: GELU
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 gelu_forward_device(MK_ACT_MLP_FC_GELU(acts, instr.layer), MK_ACT_MLP_FC(acts, instr.layer), B, S, h * 4, b_x);
             }
             break;
@@ -1945,8 +1951,8 @@ __device__ void execute_instruction(
             // OP 10: MLP projection
             dim3 grid = MLP_FORWARD_GRID(h, B, S);
             int num_blocks_x = grid.x;
-            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
-            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
             for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
                 int b_y = linear_idx / num_blocks_x;
                 int b_x = linear_idx % num_blocks_x;
@@ -1957,7 +1963,7 @@ __device__ void execute_instruction(
  
         case 11: {
             // OP 11: Residual 3
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 residual_forward_device(MK_ACT_RES3(acts, instr.layer), MK_ACT_MLP_PROJ(acts, instr.layer), MK_ACT_RES2(acts, instr.layer), B, S, h, b_x);
             }
             break;
@@ -1965,7 +1971,7 @@ __device__ void execute_instruction(
  
         case 12: {
             // OP 12: Final LayerNorm
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 layernorm_forward_device(MK_ACT_LN_F(acts), MK_ACT_RES3(acts, L - 1), MK_LN_F_W(params), MK_LN_F_B(params), MK_ACT_LN_F_MEAN(acts), MK_ACT_LN_F_RSTD(acts), S, h, b_x);
             }
             break;
@@ -1975,8 +1981,8 @@ __device__ void execute_instruction(
             // OP 13: Logits
             dim3 grid = MLP_FORWARD_GRID(V, B, S);
             int num_blocks_x = grid.x;
-            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
-            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
             for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
                 int b_y = linear_idx / num_blocks_x;
                 int b_x = linear_idx % num_blocks_x;
@@ -1987,7 +1993,7 @@ __device__ void execute_instruction(
  
         case 14: {
             // OP 14: Softmax
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 softmax_forward_device(MK_ACT_PROBS(acts), MK_ACT_LOGITS(acts), B, S, V, b_x, shared_mem);
             }
             break;
@@ -1995,7 +2001,7 @@ __device__ void execute_instruction(
  
         case 15: {
             // OP 15: Cross-entropy forward
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 cross_entropy_forward_device(MK_ACT_LOSSES(acts), MK_ACT_PROBS(acts), d_target_tokens, B, S, V, b_x);
             }
             break;
@@ -2003,7 +2009,7 @@ __device__ void execute_instruction(
  
         case 16: {
             // OP 16: Cross-entropy backward
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 cross_entropy_backward_device(MK_ACT_LOGITS(grad_acts), MK_ACT_PROBS(acts), d_target_tokens, B, S, V, b_x);
             }
             break;
@@ -2013,8 +2019,8 @@ __device__ void execute_instruction(
             // OP 17: Logits backward (input gradient)
             dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int num_blocks_x = grid.x;
-            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
-            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
             for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
                 int b_y = linear_idx / num_blocks_x;
                 int b_x = linear_idx % num_blocks_x;
@@ -2027,8 +2033,8 @@ __device__ void execute_instruction(
             // OP 18: Embedding weight gradient
             dim3 grid = MLP_BACKWARD_WEIGHT_GRID(V, h);
             int num_blocks_x = grid.x;
-            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
-            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
             for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
                 int b_y = linear_idx / num_blocks_x;
                 int b_x = linear_idx % num_blocks_x;
@@ -2039,7 +2045,7 @@ __device__ void execute_instruction(
  
         case 19: {
             // OP 19: Final LayerNorm backward
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 layernorm_backward_device(MK_ACT_RES3(grad_acts, L - 1), MK_LN_F_W(grads), MK_LN_F_B(grads), MK_ACT_LN_F(grad_acts), MK_ACT_RES3(acts, L - 1), MK_LN_F_W(params), MK_ACT_LN_F_MEAN(acts), MK_ACT_LN_F_RSTD(acts), B, S, h, b_x);
             }
             break;
@@ -2047,7 +2053,7 @@ __device__ void execute_instruction(
  
         case 20: {
             // OP 20: Residual backward (res_3)
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 residual_backward_device(MK_ACT_RES2(grad_acts, instr.layer), MK_ACT_MLP_PROJ(grad_acts, instr.layer), MK_ACT_RES3(grad_acts, instr.layer), B * S * h, b_x);
             }
             break;
@@ -2057,8 +2063,8 @@ __device__ void execute_instruction(
             // OP 21: MLP projection backward input
             dim3 grid = MLP_BACKWARD_INPUT_GRID(h * 4, B, S);
             int num_blocks_x = grid.x;
-            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
-            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
             for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
                 int b_y = linear_idx / num_blocks_x;
                 int b_x = linear_idx % num_blocks_x;
@@ -2071,8 +2077,8 @@ __device__ void execute_instruction(
             // OP 22: MLP projection backward weight
             dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h, h * 4);
             int num_blocks_x = grid.x;
-            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
-            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
             for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
                 int b_y = linear_idx / num_blocks_x;
                 int b_x = linear_idx % num_blocks_x;
@@ -2083,7 +2089,7 @@ __device__ void execute_instruction(
  
         case 23: {
             // OP 23: GELU backward
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 gelu_backward_device(MK_ACT_MLP_FC(grad_acts, instr.layer), MK_ACT_MLP_FC(acts, instr.layer), MK_ACT_MLP_FC_GELU(grad_acts, instr.layer), B * S * 4 * h, b_x);
             }
             break;
@@ -2093,8 +2099,8 @@ __device__ void execute_instruction(
             // OP 24: MLP FC backward input
             dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int num_blocks_x = grid.x;
-            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
-            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
             for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
                 int b_y = linear_idx / num_blocks_x;
                 int b_x = linear_idx % num_blocks_x;
@@ -2107,8 +2113,8 @@ __device__ void execute_instruction(
             // OP 25: MLP FC backward weight
             dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h * 4, h);
             int num_blocks_x = grid.x;
-            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
-            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
             for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
                 int b_y = linear_idx / num_blocks_x;
                 int b_x = linear_idx % num_blocks_x;
@@ -2119,7 +2125,7 @@ __device__ void execute_instruction(
  
         case 26: {
             // OP 26: LayerNorm 2 backward
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 layernorm_backward_device(MK_ACT_RES2(grad_acts, instr.layer), MK_LN2_W(grads, instr.layer), MK_LN2_B(grads, instr.layer), MK_ACT_LN2(grad_acts, instr.layer), MK_ACT_RES2(acts, instr.layer), MK_LN2_W(params, instr.layer), MK_ACT_LN2_MEAN(acts, instr.layer), MK_ACT_LN2_RSTD(acts, instr.layer), B, S, h, b_x);
             }
             break;
@@ -2128,7 +2134,7 @@ __device__ void execute_instruction(
         case 27: {
             // OP 27: Residual backward (res_2)
             float *g_res = (instr.layer == 0) ? MK_ACT_ENCODED(grad_acts) : MK_ACT_RES3(grad_acts, instr.layer - 1);
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 residual_backward_device(g_res, MK_ACT_ATT_PROJ(grad_acts, instr.layer), MK_ACT_RES2(grad_acts, instr.layer), B * S * h, b_x);
             }
             break;
@@ -2138,8 +2144,8 @@ __device__ void execute_instruction(
             // OP 28: Attention projection backward input
             dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int num_blocks_x = grid.x;
-            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
-            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
             for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
                 int b_y = linear_idx / num_blocks_x;
                 int b_x = linear_idx % num_blocks_x;
@@ -2152,8 +2158,8 @@ __device__ void execute_instruction(
             // OP 29: Attention projection backward weight
             dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h, h);
             int num_blocks_x = grid.x;
-            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
-            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
             for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
                 int b_y = linear_idx / num_blocks_x;
                 int b_x = linear_idx % num_blocks_x;
@@ -2164,7 +2170,7 @@ __device__ void execute_instruction(
  
         case 30: {
             // OP 30: Attention backward
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 attention_backward_device(MK_ACT_QKV(grad_acts, instr.layer), MK_ACT_PREATT(grad_acts, instr.layer), MK_ACT_ATT(grad_acts, instr.layer), MK_ACT_ATTY(grad_acts, instr.layer), MK_ACT_QKV(acts, instr.layer), MK_ACT_ATT(acts, instr.layer), B, S, h, n_head, b_x);
             }
             break;
@@ -2174,8 +2180,8 @@ __device__ void execute_instruction(
             // OP 31: QKV backward input
             dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int num_blocks_x = grid.x;
-            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
-            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
             for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
                 int b_y = linear_idx / num_blocks_x;
                 int b_x = linear_idx % num_blocks_x;
@@ -2188,8 +2194,8 @@ __device__ void execute_instruction(
             // OP 32: QKV backward weight
             dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h * 3, h);
             int num_blocks_x = grid.x;
-            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
-            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
             for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
                 int b_y = linear_idx / num_blocks_x;
                 int b_x = linear_idx % num_blocks_x;
@@ -2202,7 +2208,7 @@ __device__ void execute_instruction(
             // OP 33: LayerNorm 1 backward
             float *g_res = (instr.layer == 0) ? MK_ACT_ENCODED(grad_acts) : MK_ACT_RES3(grad_acts, instr.layer - 1);
             float *res = (instr.layer == 0) ? MK_ACT_ENCODED(acts) : MK_ACT_RES3(acts, instr.layer - 1);
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 layernorm_backward_device(g_res, MK_LN1_W(grads, instr.layer), MK_LN1_B(grads, instr.layer), MK_ACT_LN1(grad_acts, instr.layer), res, MK_LN1_W(params, instr.layer), MK_ACT_LN1_MEAN(acts, instr.layer), MK_ACT_LN1_RSTD(acts, instr.layer), B, S, h, b_x);
             }
             break;
@@ -2210,7 +2216,7 @@ __device__ void execute_instruction(
  
         case 34: {
             // OP 34: Embedding backward
-            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+            for (int b_x = start_b_x; b_x <= end_b_x; b_x++) {
                 embedding_backward_device(MK_WTE(grads), MK_WPE(grads), MK_ACT_ENCODED(grad_acts), d_input_tokens, B, S, h, b_x);
             }
             break;
