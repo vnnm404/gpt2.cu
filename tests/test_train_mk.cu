@@ -305,7 +305,11 @@ typedef struct {
     int bar_idx;
     int expected;
     bool inc;
+    int instr_idx;  // Index of this instruction within its SM
 } instruction_t;
+
+// Maximum instructions per SM (for timing arrays)
+#define MAX_INSTR_PER_SM 2000
 
 typedef struct {
     int n;
@@ -315,6 +319,15 @@ typedef struct {
 int *bar;  // [B, 1 + (L * 10 + 3) + 1 + (5 + L * 13 + 1)] global atomics
 stream_t *streams[NUM_SM];  // Host streams
 stream_t **d_streams;  // Device streams array
+
+// Timing buffers for measuring time spent in each SM
+long long *d_sm_start_times;  // Start time for each SM (clock64)
+long long *d_sm_end_times;    // End time for each SM (clock64)
+
+// Per-instruction timing: bar_enter_time[sm * MAX_INSTR_PER_SM + instr_idx]
+long long *d_bar_enter_time;  // Time before entering spin loop
+long long *d_bar_exit_time;   // Time after exiting spin loop
+int *h_instr_counts;          // Number of instructions per SM (for output)
 
 // Function prototypes
 int setup_train_buffers(train_buffers_t *buffers, int seq_len);
@@ -340,7 +353,11 @@ __global__ void megakernel(
     const int *d_target_tokens,
 
     int *bar,
-    stream_t **streams
+    stream_t **streams,
+    long long *sm_start_times,
+    long long *sm_end_times,
+    long long *bar_enter_time,
+    long long *bar_exit_time
 );
 
 __device__ void execute_stream(
@@ -355,7 +372,9 @@ __device__ void execute_stream(
     const int *d_target_tokens,
 
     int *bar,
-    stream_t *stream
+    stream_t *stream,
+    long long *bar_enter_time,
+    long long *bar_exit_time
 );
 
 __device__ void execute_instruction(
@@ -370,7 +389,9 @@ __device__ void execute_instruction(
     const int *d_target_tokens,
 
     int *bar,
-    instruction_t instr
+    instruction_t instr,
+    long long *bar_enter_time,
+    long long *bar_exit_time
 );
 
 // Helper: compute mean loss
@@ -535,6 +556,24 @@ int main(int argc, char *argv[]) {
     int shared_mem_size = 2 * TILE_SIZE * TILE_SIZE * sizeof(float);
     int threads_per_block = 1024;
     printf("Shared memory size per block: %d bytes\n", shared_mem_size);
+
+    // Allocate timing buffers for SM timing measurement
+    gpuErrchk(cudaMalloc(&d_sm_start_times, NUM_SM * sizeof(long long)));
+    gpuErrchk(cudaMalloc(&d_sm_end_times, NUM_SM * sizeof(long long)));
+    long long *h_sm_start_times = (long long *)malloc(NUM_SM * sizeof(long long));
+    long long *h_sm_end_times = (long long *)malloc(NUM_SM * sizeof(long long));
+
+    // Allocate per-instruction timing buffers for bar enter/exit times
+    gpuErrchk(cudaMalloc(&d_bar_enter_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long)));
+    gpuErrchk(cudaMalloc(&d_bar_exit_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long)));
+    long long *h_bar_enter_time = (long long *)malloc(NUM_SM * MAX_INSTR_PER_SM * sizeof(long long));
+    long long *h_bar_exit_time = (long long *)malloc(NUM_SM * MAX_INSTR_PER_SM * sizeof(long long));
+
+    // Store instruction counts per SM for output
+    h_instr_counts = (int *)malloc(NUM_SM * sizeof(int));
+    for (int sm = 0; sm < NUM_SM; sm++) {
+        h_instr_counts[sm] = streams[sm]->n;
+    }
     
     // Initialize optimizer state
     opt_state.learning_rate = 1e-4f;
@@ -549,6 +588,7 @@ int main(int argc, char *argv[]) {
     float losses[10];
     
     // Run 10 training iterations
+    // MARK: ITER
     for (int step = 0; step < 10; step++) {
         struct timespec start, end;
         clock_gettime(CLOCK_MONOTONIC, &start);
@@ -571,10 +611,14 @@ int main(int argc, char *argv[]) {
             d_input_tokens,
             d_target_tokens,
             bar,
-            d_streams
+            d_streams,
+            d_sm_start_times,
+            d_sm_end_times,
+            d_bar_enter_time,
+            d_bar_exit_time
         );
         gpuErrchk(cudaGetLastError());
-        // gpuErrchk(cudaDeviceSynchronize());
+        gpuErrchk(cudaDeviceSynchronize());
 
         float mean_loss = compute_mean_loss(&buffers.losses, B, T);
         
@@ -585,6 +629,51 @@ int main(int argc, char *argv[]) {
         double time_elapsed_s = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
         
         printf("step %d: loss %f (took %f ms)\n", step, mean_loss, time_elapsed_s * 1000);
+
+        // Copy timing data from device to host and print
+        gpuErrchk(cudaMemcpy(h_sm_start_times, d_sm_start_times, NUM_SM * sizeof(long long), cudaMemcpyDeviceToHost));
+        gpuErrchk(cudaMemcpy(h_sm_end_times, d_sm_end_times, NUM_SM * sizeof(long long), cudaMemcpyDeviceToHost));
+        
+        // Find min start time to compute relative times
+        long long min_start = h_sm_start_times[0];
+        for (int sm = 1; sm < NUM_SM; sm++) {
+            if (h_sm_start_times[sm] < min_start) {
+                min_start = h_sm_start_times[sm];
+            }
+        }
+        
+        printf("SM Timing (step %d):\n", step);
+        for (int sm = 0; sm < NUM_SM; sm++) {
+            long long rel_start = h_sm_start_times[sm] - min_start;
+            long long rel_end = h_sm_end_times[sm] - min_start;
+            long long duration = h_sm_end_times[sm] - h_sm_start_times[sm];
+            printf("  SM %2d: start=%12lld, end=%12lld, duration=%12lld ms\n", sm, rel_start, rel_end, duration / 1000000);
+        }
+
+        // Copy per-instruction timing data and write to timer.txt
+        gpuErrchk(cudaMemcpy(h_bar_enter_time, d_bar_enter_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long), cudaMemcpyDeviceToHost));
+        gpuErrchk(cudaMemcpy(h_bar_exit_time, d_bar_exit_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long), cudaMemcpyDeviceToHost));
+
+        // Write to timer.txt
+        {
+            FILE *f = fopen("timer.txt", step == 0 ? "w" : "a");
+            if (f) {
+                fprintf(f, "=== Step %d ===\n", step);
+                for (int sm = 0; sm < NUM_SM; sm++) {
+                    fprintf(f, "SM%d:\n", sm);
+                    for (int i = 0; i < h_instr_counts[sm]; i++) {
+                        int idx = sm * MAX_INSTR_PER_SM + i;
+                        long long enter = h_bar_enter_time[idx];
+                        long long exit = h_bar_exit_time[idx];
+                        long long duration = exit - enter;
+                        fprintf(f, "  instr %d: enter=%lld, exit=%lld, duration=%lld ms\n", i, enter - min_start, exit - min_start, duration / 1000000);
+                    }
+                }
+                fprintf(f, "\n");
+                fclose(f);
+            }
+        }
+
         losses[step] = mean_loss;
     }
     
@@ -624,6 +713,15 @@ int main(int argc, char *argv[]) {
     free_train_buffers(&g_buffers);
     if (opt_state.m_memory) cudaFree(opt_state.m_memory);
     if (opt_state.v_memory) cudaFree(opt_state.v_memory);
+    cudaFree(d_sm_start_times);
+    cudaFree(d_sm_end_times);
+    free(h_sm_start_times);
+    free(h_sm_end_times);
+    cudaFree(d_bar_enter_time);
+    cudaFree(d_bar_exit_time);
+    free(h_bar_enter_time);
+    free(h_bar_exit_time);
+    free(h_instr_counts);
     gpt2_free(&model);
     gpt2_free(&g_model);
     
@@ -1675,10 +1773,11 @@ stream_t** schedule_instructions(int seq_len) {
         }
     }
  
-    // Second pass: distribute instructions
+    // Second pass: distribute instructions and set instr_idx
     int *sm_indices = (int *)calloc(NUM_SM, sizeof(int));
     for (int i = 0; i < instruction_count; i++) {
         int sm_id = i % NUM_SM;
+        all_instructions[i].instr_idx = sm_indices[sm_id];  // Set the instruction index within this SM
         streams[sm_id]->instructions[sm_indices[sm_id]++] = all_instructions[i];
     }
  
@@ -1692,6 +1791,66 @@ stream_t** schedule_instructions(int seq_len) {
         printf("%d, ", streams[sm]->n);
     }
     printf("\n");
+
+    // Write instructions per SM to temp.txt
+    {
+        const char* op_names[] = {
+            "NONE",                      // 0
+            "EMB_FWD",                   // 1
+            "LN1_FWD",                   // 2
+            "QKV_FWD",                   // 3
+            "ATTN_FWD",                  // 4
+            "ATTN_PROJ_FWD",             // 5
+            "RES2_FWD",                  // 6
+            "LN2_FWD",                   // 7
+            "MLP_FC_FWD",                // 8
+            "GELU_FWD",                  // 9
+            "MLP_PROJ_FWD",              // 10
+            "RES3_FWD",                  // 11
+            "LN_F_FWD",                  // 12
+            "LOGITS_FWD",                // 13
+            "SOFTMAX_FWD",               // 14
+            "CE_FWD",                    // 15
+            "CE_BWD",                    // 16
+            "LOGITS_BWD",                // 17
+            "EMB_W_GRAD",                // 18
+            "LN_F_BWD",                  // 19
+            "RES3_BWD",                  // 20
+            "MLP_PROJ_BWD_IN",           // 21
+            "MLP_PROJ_BWD_W",            // 22
+            "GELU_BWD",                  // 23
+            "MLP_FC_BWD_IN",             // 24
+            "MLP_FC_BWD_W",              // 25
+            "LN2_BWD",                   // 26
+            "RES2_BWD",                  // 27
+            "ATTN_PROJ_BWD_IN",          // 28
+            "ATTN_PROJ_BWD_W",           // 29
+            "ATTN_BWD",                  // 30
+            "QKV_BWD_IN",                // 31
+            "QKV_BWD_W",                 // 32
+            "LN1_BWD",                   // 33
+            "EMB_BWD",                   // 34
+        };
+        int num_op_names = sizeof(op_names) / sizeof(op_names[0]);
+
+        FILE *f = fopen("temp.txt", "w");
+        if (f) {
+            for (int sm = 0; sm < NUM_SM; sm++) {
+                fprintf(f, "SM%d\n", sm);
+                for (int i = 0; i < streams[sm]->n; i++) {
+                    int op = streams[sm]->instructions[i].op;
+                    if (op >= 0 && op < num_op_names) {
+                        fprintf(f, "%d: %s\n", i, op_names[op]);
+                    } else {
+                        fprintf(f, "%d: OP%d\n", i, op);
+                    }
+                }
+                fprintf(f, "\n");
+            }
+            fclose(f);
+            printf("Wrote instructions per SM to temp.txt\n");
+        }
+    }
  
     // Allocate device memory for streams and instructions
     stream_t **d_streams_ptr;
@@ -1764,6 +1923,12 @@ void free_schedule(stream_t **d_streams_ptr) {
         }
     }
 }
+
+__device__ __forceinline__ unsigned long long read_globaltimer() {
+    unsigned long long t;
+    asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t));
+    return t;
+}
  
 __global__ void megakernel(
     float *params,
@@ -1777,11 +1942,30 @@ __global__ void megakernel(
     const int *d_target_tokens,
 
     int *bar,
-    stream_t **streams
+    stream_t **streams,
+    long long *sm_start_times,
+    long long *sm_end_times,
+    long long *bar_enter_time,
+    long long *bar_exit_time
 ) {
     int sm_id = blockIdx.x;  // Each SM gets its own block
+    
+    // Record start time using clock64() - only thread 0 records
+    if (threadIdx.x == 0) {
+        // sm_start_times[sm_id] = clock64();
+        sm_start_times[sm_id] = read_globaltimer();
+    }
+    __syncthreads();
+    
     stream_t *stream = streams[sm_id];
-    execute_stream(params, grads, acts, grad_acts, seq_len, d_input_tokens, d_target_tokens, bar, stream);
+    execute_stream(params, grads, acts, grad_acts, seq_len, d_input_tokens, d_target_tokens, bar, stream, bar_enter_time, bar_exit_time);
+    
+    // Record end time - only thread 0 records
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        // sm_end_times[sm_id] = clock64();
+        sm_end_times[sm_id] = read_globaltimer();
+    }
 }
  
  
@@ -1797,7 +1981,9 @@ __device__ void execute_stream(
     const int *d_target_tokens,
 
     int *bar,
-    stream_t *stream
+    stream_t *stream,
+    long long *bar_enter_time,
+    long long *bar_exit_time
 ) {
     // if (threadIdx.x == 0) {
     //     printf("SM %d starting execution of %d instructions\n", blockIdx.x, stream->n);
@@ -1806,7 +1992,7 @@ __device__ void execute_stream(
     int n = stream->n;
     for (int i = 0; i < n; i++) {
         instruction_t instr = stream->instructions[i];
-        execute_instruction(params, grads, acts, grad_acts, seq_len, d_input_tokens, d_target_tokens, bar, instr);
+        execute_instruction(params, grads, acts, grad_acts, seq_len, d_input_tokens, d_target_tokens, bar, instr, bar_enter_time, bar_exit_time);
     }
 }
  
@@ -1823,7 +2009,9 @@ __device__ void execute_instruction(
     const int *d_target_tokens,
 
     int *bar,
-    instruction_t instr
+    instruction_t instr,
+    long long *bar_enter_time,
+    long long *bar_exit_time
 ) {
     int L = MK_N_LAYER;
     int B = MK_BATCH_SIZE;
@@ -1838,6 +2026,9 @@ __device__ void execute_instruction(
     int end_b_y = instr.end_b_y;
     int op = instr.op;
     int expected = instr.expected;
+
+    int sm_id = blockIdx.x;
+    int timing_idx = sm_id * MAX_INSTR_PER_SM + instr.instr_idx;
  
     volatile int *vbar = (volatile int *)bar;
  
@@ -1845,13 +2036,31 @@ __device__ void execute_instruction(
     extern __shared__ float shared_mem[];
  
     if (instr.op != 1) {
+        // Record time before entering spin loop
+        if (threadIdx.x == 0) {
+            bar_enter_time[timing_idx] = read_globaltimer();
+        }
+
         if (threadIdx.x == 0) {
             int exp = min(NUM_SM, expected);
             while (vbar[instr.bar_idx] < exp) {
                 // __nanosleep(10);
             }
         }
+
+        // Record time after exiting spin loop
+        if (threadIdx.x == 0) {
+            bar_exit_time[timing_idx] = read_globaltimer();
+        }
  
+        __syncthreads();
+    } else {
+        // For op 1 (no spin loop), record the same time for both
+        if (threadIdx.x == 0) {
+            long long t = read_globaltimer();
+            bar_enter_time[timing_idx] = t;
+            bar_exit_time[timing_idx] = t;
+        }
         __syncthreads();
     }
  
@@ -2222,9 +2431,6 @@ __device__ void execute_instruction(
             }
             break;
         }
- 
-        default:
-            break;
     }
  
     __syncthreads();
