@@ -324,10 +324,11 @@ stream_t **d_streams;  // Device streams array
 long long *d_sm_start_times;  // Start time for each SM (clock64)
 long long *d_sm_end_times;    // End time for each SM (clock64)
 
-// Per-instruction timing: bar_enter_time[sm * MAX_INSTR_PER_SM + instr_idx]
-long long *d_bar_enter_time;  // Time before entering spin loop
-long long *d_bar_exit_time;   // Time after exiting spin loop
-int *h_instr_counts;          // Number of instructions per SM (for output)
+// Per-instruction timing: timing arrays indexed by [sm * MAX_INSTR_PER_SM + instr_idx]
+long long *d_bar_enter_time;   // Time before entering spin loop
+long long *d_bar_exit_time;    // Time after exiting spin loop  
+long long *d_instr_end_time;   // Time after instruction execution completes
+int *h_instr_counts;           // Number of instructions per SM (for output)
 
 // Function prototypes
 int setup_train_buffers(train_buffers_t *buffers, int seq_len);
@@ -357,7 +358,8 @@ __global__ void megakernel(
     long long *sm_start_times,
     long long *sm_end_times,
     long long *bar_enter_time,
-    long long *bar_exit_time
+    long long *bar_exit_time,
+    long long *instr_end_time
 );
 
 __device__ void execute_stream(
@@ -374,7 +376,8 @@ __device__ void execute_stream(
     int *bar,
     stream_t *stream,
     long long *bar_enter_time,
-    long long *bar_exit_time
+    long long *bar_exit_time,
+    long long *instr_end_time
 );
 
 __device__ void execute_instruction(
@@ -391,7 +394,8 @@ __device__ void execute_instruction(
     int *bar,
     instruction_t instr,
     long long *bar_enter_time,
-    long long *bar_exit_time
+    long long *bar_exit_time,
+    long long *instr_end_time
 );
 
 // Helper: compute mean loss
@@ -563,11 +567,13 @@ int main(int argc, char *argv[]) {
     long long *h_sm_start_times = (long long *)malloc(NUM_SM * sizeof(long long));
     long long *h_sm_end_times = (long long *)malloc(NUM_SM * sizeof(long long));
 
-    // Allocate per-instruction timing buffers for bar enter/exit times
+    // Allocate per-instruction timing buffers for bar enter/exit times and instruction end times
     gpuErrchk(cudaMalloc(&d_bar_enter_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long)));
     gpuErrchk(cudaMalloc(&d_bar_exit_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long)));
+    gpuErrchk(cudaMalloc(&d_instr_end_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long)));
     long long *h_bar_enter_time = (long long *)malloc(NUM_SM * MAX_INSTR_PER_SM * sizeof(long long));
     long long *h_bar_exit_time = (long long *)malloc(NUM_SM * MAX_INSTR_PER_SM * sizeof(long long));
+    long long *h_instr_end_time = (long long *)malloc(NUM_SM * MAX_INSTR_PER_SM * sizeof(long long));
 
     // Store instruction counts per SM for output
     h_instr_counts = (int *)malloc(NUM_SM * sizeof(int));
@@ -615,7 +621,8 @@ int main(int argc, char *argv[]) {
             d_sm_start_times,
             d_sm_end_times,
             d_bar_enter_time,
-            d_bar_exit_time
+            d_bar_exit_time,
+            d_instr_end_time
         );
         gpuErrchk(cudaGetLastError());
         gpuErrchk(cudaDeviceSynchronize());
@@ -653,6 +660,7 @@ int main(int argc, char *argv[]) {
         // Copy per-instruction timing data and write to timer.txt
         gpuErrchk(cudaMemcpy(h_bar_enter_time, d_bar_enter_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long), cudaMemcpyDeviceToHost));
         gpuErrchk(cudaMemcpy(h_bar_exit_time, d_bar_exit_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long), cudaMemcpyDeviceToHost));
+        gpuErrchk(cudaMemcpy(h_instr_end_time, d_instr_end_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long), cudaMemcpyDeviceToHost));
 
         // Write to timer.txt
         {
@@ -665,8 +673,11 @@ int main(int argc, char *argv[]) {
                         int idx = sm * MAX_INSTR_PER_SM + i;
                         long long enter = h_bar_enter_time[idx];
                         long long exit = h_bar_exit_time[idx];
-                        long long duration = exit - enter;
-                        fprintf(f, "  instr %d: enter=%lld, exit=%lld, duration=%lld ms\n", i, enter - min_start, exit - min_start, duration / 1000000);
+                        long long end = h_instr_end_time[idx];
+                        long long spin_duration = exit - enter;
+                        long long exec_duration = end - exit;
+                        fprintf(f, "  instr %d: bar_enter=%lld, bar_exit=%lld, instr_end=%lld, spin_wait=%lld, exec_time=%lld\n", 
+                                i, enter - min_start, exit - min_start, end - min_start, spin_duration / 1000000, exec_duration / 1000000);
                     }
                 }
                 fprintf(f, "\n");
@@ -719,8 +730,10 @@ int main(int argc, char *argv[]) {
     free(h_sm_end_times);
     cudaFree(d_bar_enter_time);
     cudaFree(d_bar_exit_time);
+    cudaFree(d_instr_end_time);
     free(h_bar_enter_time);
     free(h_bar_exit_time);
+    free(h_instr_end_time);
     free(h_instr_counts);
     gpt2_free(&model);
     gpt2_free(&g_model);
@@ -1946,7 +1959,8 @@ __global__ void megakernel(
     long long *sm_start_times,
     long long *sm_end_times,
     long long *bar_enter_time,
-    long long *bar_exit_time
+    long long *bar_exit_time,
+    long long *instr_end_time
 ) {
     int sm_id = blockIdx.x;  // Each SM gets its own block
     
@@ -1958,7 +1972,7 @@ __global__ void megakernel(
     __syncthreads();
     
     stream_t *stream = streams[sm_id];
-    execute_stream(params, grads, acts, grad_acts, seq_len, d_input_tokens, d_target_tokens, bar, stream, bar_enter_time, bar_exit_time);
+    execute_stream(params, grads, acts, grad_acts, seq_len, d_input_tokens, d_target_tokens, bar, stream, bar_enter_time, bar_exit_time, instr_end_time);
     
     // Record end time - only thread 0 records
     __syncthreads();
@@ -1983,7 +1997,8 @@ __device__ void execute_stream(
     int *bar,
     stream_t *stream,
     long long *bar_enter_time,
-    long long *bar_exit_time
+    long long *bar_exit_time,
+    long long *instr_end_time
 ) {
     // if (threadIdx.x == 0) {
     //     printf("SM %d starting execution of %d instructions\n", blockIdx.x, stream->n);
@@ -1992,7 +2007,7 @@ __device__ void execute_stream(
     int n = stream->n;
     for (int i = 0; i < n; i++) {
         instruction_t instr = stream->instructions[i];
-        execute_instruction(params, grads, acts, grad_acts, seq_len, d_input_tokens, d_target_tokens, bar, instr, bar_enter_time, bar_exit_time);
+        execute_instruction(params, grads, acts, grad_acts, seq_len, d_input_tokens, d_target_tokens, bar, instr, bar_enter_time, bar_exit_time, instr_end_time);
     }
 }
  
@@ -2011,7 +2026,8 @@ __device__ void execute_instruction(
     int *bar,
     instruction_t instr,
     long long *bar_enter_time,
-    long long *bar_exit_time
+    long long *bar_exit_time,
+    long long *instr_end_time
 ) {
     int L = MK_N_LAYER;
     int B = MK_BATCH_SIZE;
@@ -2434,6 +2450,11 @@ __device__ void execute_instruction(
     }
  
     __syncthreads();
+
+    // Record time after instruction execution completes
+    if (threadIdx.x == 0) {
+        instr_end_time[timing_idx] = read_globaltimer();
+    }
 
     // Only the instructions marked with `inc` perform the atomic increment.
     if (instr.inc && threadIdx.x == 0) {

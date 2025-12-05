@@ -318,22 +318,21 @@ int main()
     cudaEventCreate(&stop);
     cudaEventRecord(start);
 
-    megakernel<<<NUM_SM, threads_per_block, shared_mem_size>>>(
-        config,
-        d_model,
-        d_g_model,
-        d_buffers,
-        d_g_buffers,
-        opt_state,
-        seq_len,
-        d_input_tokens,
-        d_target_tokens,
-        bar,
-        d_streams
-    );
+    // megakernel<<<NUM_SM, threads_per_block, shared_mem_size>>>(
+    //     config,
+    //     d_model,
+    //     d_g_model,
+    //     d_buffers,
+    //     d_g_buffers,
+    //     opt_state,
+    //     seq_len,
+    //     d_input_tokens,
+    //     d_target_tokens,
+    //     bar,
+    //     d_streams
+    // );
 
-    // for (int i = 0; i < 10; i++) {
-    // forward(d_input_tokens, seq_len);
+    forward(d_input_tokens, seq_len);
     // cross_entropy(d_target_tokens, seq_len);
     // backward(d_input_tokens, d_target_tokens, seq_len);
 
