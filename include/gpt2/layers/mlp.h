@@ -5,7 +5,7 @@
 
 /* MLP layer structures and functions */
 
-#define TILE_SIZE 16
+#define TILE_SIZE 32
 
 // Helper macros for launching optimized MLP kernels
 #define MLP_FORWARD_GRID(output_dim, batch_size, seq_len) \

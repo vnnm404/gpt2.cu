@@ -299,7 +299,8 @@ typedef struct {
     int op;
     int prev_op;
     int layer;
-    int b_x, b_y;
+    int start_b_x, end_b_x;
+    int start_b_y, end_b_y;
 
     int bar_idx;
     int expected;
@@ -532,7 +533,7 @@ int main(int argc, char *argv[]) {
     gpuErrchk(cudaMalloc(&bar, bar_size * sizeof(int)));
 
     int shared_mem_size = 2 * TILE_SIZE * TILE_SIZE * sizeof(float);
-    int threads_per_block = 256;
+    int threads_per_block = 1024;
     printf("Shared memory size per block: %d bytes\n", shared_mem_size);
     
     // Initialize optimizer state
@@ -1096,6 +1097,69 @@ void zero_activation_grads(train_buffers_t *g_buffers) {
     cudaMemset(g_buffers->losses.data, 0, tensor_size(g_buffers->losses) * sizeof(float));
 }
 
+// Helper function to create instructions with block ranges
+// For 1D grids: pass num_blocks_y = 1
+// Creates at most NUM_SM instructions per operation
+void add_instructions_1d(instruction_t *all_instructions, int *instruction_count, 
+                         int op, int prev_op, int layer, int bar_idx, int expected, 
+                         int num_blocks) {
+    int num_instructions = (num_blocks <= NUM_SM) ? num_blocks : NUM_SM;
+    int blocks_per_instruction = (num_blocks + num_instructions - 1) / num_instructions;
+    
+    for (int i = 0; i < num_instructions; i++) {
+        int start_b_x = i * blocks_per_instruction;
+        int end_b_x = ((i + 1) * blocks_per_instruction < num_blocks) ? 
+                      ((i + 1) * blocks_per_instruction - 1) : (num_blocks - 1);
+        
+        if (start_b_x < num_blocks) {
+            all_instructions[(*instruction_count)++] = (instruction_t){
+                .op = op,
+                .prev_op = prev_op,
+                .layer = layer,
+                .start_b_x = start_b_x,
+                .end_b_x = end_b_x,
+                .start_b_y = 0,
+                .end_b_y = 0,
+                .bar_idx = bar_idx,
+                .expected = expected
+            };
+        }
+    }
+}
+
+void add_instructions_2d(instruction_t *all_instructions, int *instruction_count,
+                         int op, int prev_op, int layer, int bar_idx, int expected,
+                         int num_blocks_x, int num_blocks_y) {
+    int total_blocks = num_blocks_x * num_blocks_y;
+    int num_instructions = (total_blocks <= NUM_SM) ? total_blocks : NUM_SM;
+    int blocks_per_instruction = (total_blocks + num_instructions - 1) / num_instructions;
+    
+    for (int i = 0; i < num_instructions; i++) {
+        int start_linear = i * blocks_per_instruction;
+        int end_linear = ((i + 1) * blocks_per_instruction < total_blocks) ?
+                         ((i + 1) * blocks_per_instruction - 1) : (total_blocks - 1);
+        
+        if (start_linear < total_blocks) {
+            int start_b_y = start_linear / num_blocks_x;
+            int start_b_x = start_linear % num_blocks_x;
+            int end_b_y = end_linear / num_blocks_x;
+            int end_b_x = end_linear % num_blocks_x;
+            
+            all_instructions[(*instruction_count)++] = (instruction_t){
+                .op = op,
+                .prev_op = prev_op,
+                .layer = layer,
+                .start_b_x = start_b_x,
+                .end_b_x = end_b_x,
+                .start_b_y = start_b_y,
+                .end_b_y = end_b_y,
+                .bar_idx = bar_idx,
+                .expected = expected
+            };
+        }
+    }
+}
+
 stream_t** schedule_instructions(int seq_len) {
     int L = config.n_layer;
     int B = config.batch_size;
@@ -1127,17 +1191,7 @@ stream_t** schedule_instructions(int seq_len) {
         int expected = 0;
         int num_blocks = B;
  
-        for (int block = 0; block < num_blocks; block++) {
-            all_instructions[instruction_count++] = (instruction_t){
-                .op = op,
-                .prev_op = prev_op,
-                .layer = layer,
-                .b_x = block,
-                .b_y = -1,
-                .bar_idx = bar_idx,
-                .expected = expected
-            };
-        }
+        add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer, bar_idx, expected, num_blocks);
         prev_op = op;
     }
  
@@ -1150,17 +1204,7 @@ stream_t** schedule_instructions(int seq_len) {
             int expected = (layer_idx == 0) ? B : CEIL_DIV(B * S * h, thr);
             int num_blocks = B;
  
-            for (int block = 0; block < num_blocks; block++) {
-                all_instructions[instruction_count++] = (instruction_t){
-                    .op = op,
-                    .prev_op = prev_op,
-                    .layer = layer_idx,
-                    .b_x = block,
-                    .b_y = -1,
-                    .bar_idx = bar_idx,
-                    .expected = expected
-                };
-            }
+            add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
         }
  
@@ -1173,19 +1217,7 @@ stream_t** schedule_instructions(int seq_len) {
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
  
-            for (int by = 0; by < num_blocks_y; by++) {
-                for (int bx = 0; bx < num_blocks_x; bx++) {
-                    all_instructions[instruction_count++] = (instruction_t){
-                        .op = op,
-                        .prev_op = prev_op,
-                        .layer = layer_idx,
-                        .b_x = bx,
-                        .b_y = by,
-                        .bar_idx = bar_idx,
-                        .expected = expected
-                    };
-                }
-            }
+            add_instructions_2d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks_x, num_blocks_y);
             prev_op = op;
         }
  
@@ -1197,17 +1229,7 @@ stream_t** schedule_instructions(int seq_len) {
             int expected = grid.x * grid.y;
             int num_blocks = CEIL_DIV(B * S * n_head, thr);
  
-            for (int block = 0; block < num_blocks; block++) {
-                all_instructions[instruction_count++] = (instruction_t){
-                    .op = op,
-                    .prev_op = prev_op,
-                    .layer = layer_idx,
-                    .b_x = block,
-                    .b_y = -1,
-                    .bar_idx = bar_idx,
-                    .expected = expected
-                };
-            }
+            add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
         }
  
@@ -1220,19 +1242,7 @@ stream_t** schedule_instructions(int seq_len) {
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
  
-            for (int by = 0; by < num_blocks_y; by++) {
-                for (int bx = 0; bx < num_blocks_x; bx++) {
-                    all_instructions[instruction_count++] = (instruction_t){
-                        .op = op,
-                        .prev_op = prev_op,
-                        .layer = layer_idx,
-                        .b_x = bx,
-                        .b_y = by,
-                        .bar_idx = bar_idx,
-                        .expected = expected
-                    };
-                }
-            }
+            add_instructions_2d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks_x, num_blocks_y);
             prev_op = op;
         }
  
@@ -1244,17 +1254,7 @@ stream_t** schedule_instructions(int seq_len) {
             int expected = grid.x * grid.y;
             int num_blocks = CEIL_DIV(B * S * h, thr);
  
-            for (int block = 0; block < num_blocks; block++) {
-                all_instructions[instruction_count++] = (instruction_t){
-                    .op = op,
-                    .prev_op = prev_op,
-                    .layer = layer_idx,
-                    .b_x = block,
-                    .b_y = -1,
-                    .bar_idx = bar_idx,
-                    .expected = expected
-                };
-            }
+            add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
         }
  
@@ -1265,17 +1265,7 @@ stream_t** schedule_instructions(int seq_len) {
             int expected = CEIL_DIV(B * S * h, thr);
             int num_blocks = B;
  
-            for (int block = 0; block < num_blocks; block++) {
-                all_instructions[instruction_count++] = (instruction_t){
-                    .op = op,
-                    .prev_op = prev_op,
-                    .layer = layer_idx,
-                    .b_x = block,
-                    .b_y = -1,
-                    .bar_idx = bar_idx,
-                    .expected = expected
-                };
-            }
+            add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
         }
  
@@ -1288,19 +1278,7 @@ stream_t** schedule_instructions(int seq_len) {
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
  
-            for (int by = 0; by < num_blocks_y; by++) {
-                for (int bx = 0; bx < num_blocks_x; bx++) {
-                    all_instructions[instruction_count++] = (instruction_t){
-                        .op = op,
-                        .prev_op = prev_op,
-                        .layer = layer_idx,
-                        .b_x = bx,
-                        .b_y = by,
-                        .bar_idx = bar_idx,
-                        .expected = expected
-                    };
-                }
-            }
+            add_instructions_2d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks_x, num_blocks_y);
             prev_op = op;
         }
  
@@ -1312,17 +1290,7 @@ stream_t** schedule_instructions(int seq_len) {
             int expected = grid.x * grid.y;
             int num_blocks = CEIL_DIV(B * S * 4 * h, thr);
  
-            for (int block = 0; block < num_blocks; block++) {
-                all_instructions[instruction_count++] = (instruction_t){
-                    .op = op,
-                    .prev_op = prev_op,
-                    .layer = layer_idx,
-                    .b_x = block,
-                    .b_y = -1,
-                    .bar_idx = bar_idx,
-                    .expected = expected
-                };
-            }
+            add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
         }
  
@@ -1335,19 +1303,7 @@ stream_t** schedule_instructions(int seq_len) {
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
  
-            for (int by = 0; by < num_blocks_y; by++) {
-                for (int bx = 0; bx < num_blocks_x; bx++) {
-                    all_instructions[instruction_count++] = (instruction_t){
-                        .op = op,
-                        .prev_op = prev_op,
-                        .layer = layer_idx,
-                        .b_x = bx,
-                        .b_y = by,
-                        .bar_idx = bar_idx,
-                        .expected = expected
-                    };
-                }
-            }
+            add_instructions_2d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks_x, num_blocks_y);
             prev_op = op;
         }
  
@@ -1359,17 +1315,7 @@ stream_t** schedule_instructions(int seq_len) {
             int expected = grid.x * grid.y;
             int num_blocks = CEIL_DIV(B * S * h, thr);
  
-            for (int block = 0; block < num_blocks; block++) {
-                all_instructions[instruction_count++] = (instruction_t){
-                    .op = op,
-                    .prev_op = prev_op,
-                    .layer = layer_idx,
-                    .b_x = block,
-                    .b_y = -1,
-                    .bar_idx = bar_idx,
-                    .expected = expected
-                };
-            }
+            add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
         }
     }
@@ -1381,17 +1327,7 @@ stream_t** schedule_instructions(int seq_len) {
         int expected = CEIL_DIV(B * S * h, thr);
         int num_blocks = B;
  
-        for (int block = 0; block < num_blocks; block++) {
-            all_instructions[instruction_count++] = (instruction_t){
-                .op = op,
-                .prev_op = prev_op,
-                .layer = -1,
-                .b_x = block,
-                .b_y = -1,
-                .bar_idx = bar_idx,
-                .expected = expected
-            };
-        }
+        add_instructions_1d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks);
         prev_op = op;
     }
  
@@ -1404,19 +1340,7 @@ stream_t** schedule_instructions(int seq_len) {
         int num_blocks_x = grid.x;
         int num_blocks_y = grid.y;
  
-        for (int by = 0; by < num_blocks_y; by++) {
-            for (int bx = 0; bx < num_blocks_x; bx++) {
-                all_instructions[instruction_count++] = (instruction_t){
-                    .op = op,
-                    .prev_op = prev_op,
-                    .layer = -1,
-                    .b_x = bx,
-                    .b_y = by,
-                    .bar_idx = bar_idx,
-                    .expected = expected
-                };
-            }
-        }
+        add_instructions_2d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks_x, num_blocks_y);
         prev_op = op;
     }
  
@@ -1428,17 +1352,7 @@ stream_t** schedule_instructions(int seq_len) {
         int expected = grid.x * grid.y;
         int num_blocks = CEIL_DIV(B * S * V, thr);
  
-        for (int block = 0; block < num_blocks; block++) {
-            all_instructions[instruction_count++] = (instruction_t){
-                .op = op,
-                .prev_op = prev_op,
-                .layer = -1,
-                .b_x = block,
-                .b_y = -1,
-                .bar_idx = bar_idx,
-                .expected = expected
-            };
-        }
+        add_instructions_1d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks);
         prev_op = op;
     }
  
@@ -1449,17 +1363,7 @@ stream_t** schedule_instructions(int seq_len) {
         int expected = CEIL_DIV(B * S * V, thr);
         int num_blocks = CEIL_DIV(B * S, thr);
  
-        for (int block = 0; block < num_blocks; block++) {
-            all_instructions[instruction_count++] = (instruction_t){
-                .op = op,
-                .prev_op = prev_op,
-                .layer = -1,
-                .b_x = block,
-                .b_y = -1,
-                .bar_idx = bar_idx,
-                .expected = expected
-            };
-        }
+        add_instructions_1d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks);
         prev_op = op;
     }
  
@@ -1472,17 +1376,7 @@ stream_t** schedule_instructions(int seq_len) {
         int expected = CEIL_DIV(B * S, thr);
         int num_blocks = CEIL_DIV(B * S, thr);
  
-        for (int block = 0; block < num_blocks; block++) {
-            all_instructions[instruction_count++] = (instruction_t){
-                .op = op,
-                .prev_op = prev_op,
-                .layer = -1,
-                .b_x = block,
-                .b_y = -1,
-                .bar_idx = bar_idx,
-                .expected = expected
-            };
-        }
+        add_instructions_1d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks);
         prev_op = op;
     }
  
@@ -1495,19 +1389,7 @@ stream_t** schedule_instructions(int seq_len) {
         int num_blocks_x = grid.x;
         int num_blocks_y = grid.y;
  
-        for (int by = 0; by < num_blocks_y; by++) {
-            for (int bx = 0; bx < num_blocks_x; bx++) {
-                all_instructions[instruction_count++] = (instruction_t){
-                    .op = op,
-                    .prev_op = prev_op,
-                    .layer = -1,
-                    .b_x = bx,
-                    .b_y = by,
-                    .bar_idx = bar_idx,
-                    .expected = expected
-                };
-            }
-        }
+        add_instructions_2d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks_x, num_blocks_y);
         prev_op = op;
     }
  
@@ -1521,19 +1403,7 @@ stream_t** schedule_instructions(int seq_len) {
         int num_blocks_x = grid.x;
         int num_blocks_y = grid.y;
  
-        for (int by = 0; by < num_blocks_y; by++) {
-            for (int bx = 0; bx < num_blocks_x; bx++) {
-                all_instructions[instruction_count++] = (instruction_t){
-                    .op = op,
-                    .prev_op = prev_op,
-                    .layer = -1,
-                    .b_x = bx,
-                    .b_y = by,
-                    .bar_idx = bar_idx,
-                    .expected = expected
-                };
-            }
-        }
+        add_instructions_2d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks_x, num_blocks_y);
         prev_op = op;
     }
  
@@ -1545,17 +1415,7 @@ stream_t** schedule_instructions(int seq_len) {
         int expected = grid_prev.x * grid_prev.y;
         int num_blocks = B;
  
-        for (int block = 0; block < num_blocks; block++) {
-            all_instructions[instruction_count++] = (instruction_t){
-                .op = op,
-                .prev_op = prev_op,
-                .layer = -1,
-                .b_x = block,
-                .b_y = -1,
-                .bar_idx = bar_idx,
-                .expected = expected
-            };
-        }
+        add_instructions_1d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks);
         prev_op = op;
     }
  
@@ -1568,17 +1428,7 @@ stream_t** schedule_instructions(int seq_len) {
             int expected = B;
             int num_blocks = CEIL_DIV(B * S * h, thr);
  
-            for (int block = 0; block < num_blocks; block++) {
-                all_instructions[instruction_count++] = (instruction_t){
-                    .op = op,
-                    .prev_op = prev_op,
-                    .layer = layer_idx,
-                    .b_x = block,
-                    .b_y = -1,
-                    .bar_idx = bar_idx,
-                    .expected = expected
-                };
-            }
+            add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
         }
  
@@ -1591,19 +1441,7 @@ stream_t** schedule_instructions(int seq_len) {
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
  
-            for (int by = 0; by < num_blocks_y; by++) {
-                for (int bx = 0; bx < num_blocks_x; bx++) {
-                    all_instructions[instruction_count++] = (instruction_t){
-                        .op = op,
-                        .prev_op = prev_op,
-                        .layer = layer_idx,
-                        .b_x = bx,
-                        .b_y = by,
-                        .bar_idx = bar_idx,
-                        .expected = expected
-                    };
-                }
-            }
+            add_instructions_2d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks_x, num_blocks_y);
             prev_op = op;
         }
  
@@ -1618,19 +1456,7 @@ stream_t** schedule_instructions(int seq_len) {
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
  
-            for (int by = 0; by < num_blocks_y; by++) {
-                for (int bx = 0; bx < num_blocks_x; bx++) {
-                    all_instructions[instruction_count++] = (instruction_t){
-                        .op = op,
-                        .prev_op = prev_op,
-                        .layer = layer_idx,
-                        .b_x = bx,
-                        .b_y = by,
-                        .bar_idx = bar_idx,
-                        .expected = expected
-                    };
-                }
-            }
+            add_instructions_2d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks_x, num_blocks_y);
             prev_op = op;
         }
 // if(layer_idx == L-2)break;
@@ -1644,17 +1470,7 @@ stream_t** schedule_instructions(int seq_len) {
             int expected = grid_prev.x * grid_prev.y;
             int num_blocks = CEIL_DIV(B * S * 4 * h, thr);
  
-            for (int block = 0; block < num_blocks; block++) {
-                all_instructions[instruction_count++] = (instruction_t){
-                    .op = op,
-                    .prev_op = prev_op,
-                    .layer = layer_idx,
-                    .b_x = block,
-                    .b_y = -1,
-                    .bar_idx = bar_idx,
-                    .expected = expected
-                };
-            }
+            add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
         }
  
@@ -1667,19 +1483,7 @@ stream_t** schedule_instructions(int seq_len) {
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
  
-            for (int by = 0; by < num_blocks_y; by++) {
-                for (int bx = 0; bx < num_blocks_x; bx++) {
-                    all_instructions[instruction_count++] = (instruction_t){
-                        .op = op,
-                        .prev_op = prev_op,
-                        .layer = layer_idx,
-                        .b_x = bx,
-                        .b_y = by,
-                        .bar_idx = bar_idx,
-                        .expected = expected
-                    };
-                }
-            }
+            add_instructions_2d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks_x, num_blocks_y);
             prev_op = op;
         }
  
@@ -1693,19 +1497,7 @@ stream_t** schedule_instructions(int seq_len) {
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
  
-            for (int by = 0; by < num_blocks_y; by++) {
-                for (int bx = 0; bx < num_blocks_x; bx++) {
-                    all_instructions[instruction_count++] = (instruction_t){
-                        .op = op,
-                        .prev_op = prev_op,
-                        .layer = layer_idx,
-                        .b_x = bx,
-                        .b_y = by,
-                        .bar_idx = bar_idx,
-                        .expected = expected
-                    };
-                }
-            }
+            add_instructions_2d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks_x, num_blocks_y);
             prev_op = op;
         }
  
@@ -1717,17 +1509,7 @@ stream_t** schedule_instructions(int seq_len) {
             int expected = grid_prev.x * grid_prev.y;
             int num_blocks = B;
  
-            for (int block = 0; block < num_blocks; block++) {
-                all_instructions[instruction_count++] = (instruction_t){
-                    .op = op,
-                    .prev_op = prev_op,
-                    .layer = layer_idx,
-                    .b_x = block,
-                    .b_y = -1,
-                    .bar_idx = bar_idx,
-                    .expected = expected
-                };
-            }
+            add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
         }
  
@@ -1739,17 +1521,7 @@ stream_t** schedule_instructions(int seq_len) {
             int expected = B;
             int num_blocks = CEIL_DIV(B * S * h, thr);
  
-            for (int block = 0; block < num_blocks; block++) {
-                all_instructions[instruction_count++] = (instruction_t){
-                    .op = op,
-                    .prev_op = prev_op,
-                    .layer = layer_idx,
-                    .b_x = block,
-                    .b_y = -1,
-                    .bar_idx = bar_idx,
-                    .expected = expected
-                };
-            }
+            add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
         }
  
@@ -1762,19 +1534,7 @@ stream_t** schedule_instructions(int seq_len) {
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
  
-            for (int by = 0; by < num_blocks_y; by++) {
-                for (int bx = 0; bx < num_blocks_x; bx++) {
-                    all_instructions[instruction_count++] = (instruction_t){
-                        .op = op,
-                        .prev_op = prev_op,
-                        .layer = layer_idx,
-                        .b_x = bx,
-                        .b_y = by,
-                        .bar_idx = bar_idx,
-                        .expected = expected
-                    };
-                }
-            }
+            add_instructions_2d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks_x, num_blocks_y);
             prev_op = op;
         }
  
@@ -1788,19 +1548,7 @@ stream_t** schedule_instructions(int seq_len) {
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
  
-            for (int by = 0; by < num_blocks_y; by++) {
-                for (int bx = 0; bx < num_blocks_x; bx++) {
-                    all_instructions[instruction_count++] = (instruction_t){
-                        .op = op,
-                        .prev_op = prev_op,
-                        .layer = layer_idx,
-                        .b_x = bx,
-                        .b_y = by,
-                        .bar_idx = bar_idx,
-                        .expected = expected
-                    };
-                }
-            }
+            add_instructions_2d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks_x, num_blocks_y);
             prev_op = op;
         }
  
@@ -1812,17 +1560,7 @@ stream_t** schedule_instructions(int seq_len) {
             int expected = grid_prev.x * grid_prev.y;
             int num_blocks = CEIL_DIV(B * S * n_head, thr);
  
-            for (int block = 0; block < num_blocks; block++) {
-                all_instructions[instruction_count++] = (instruction_t){
-                    .op = op,
-                    .prev_op = prev_op,
-                    .layer = layer_idx,
-                    .b_x = block,
-                    .b_y = -1,
-                    .bar_idx = bar_idx,
-                    .expected = expected
-                };
-            }
+            add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
         }
  
@@ -1835,19 +1573,7 @@ stream_t** schedule_instructions(int seq_len) {
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
  
-            for (int by = 0; by < num_blocks_y; by++) {
-                for (int bx = 0; bx < num_blocks_x; bx++) {
-                    all_instructions[instruction_count++] = (instruction_t){
-                        .op = op,
-                        .prev_op = prev_op,
-                        .layer = layer_idx,
-                        .b_x = bx,
-                        .b_y = by,
-                        .bar_idx = bar_idx,
-                        .expected = expected
-                    };
-                }
-            }
+            add_instructions_2d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks_x, num_blocks_y);
             prev_op = op;
         }
  
@@ -1861,19 +1587,7 @@ stream_t** schedule_instructions(int seq_len) {
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
  
-            for (int by = 0; by < num_blocks_y; by++) {
-                for (int bx = 0; bx < num_blocks_x; bx++) {
-                    all_instructions[instruction_count++] = (instruction_t){
-                        .op = op,
-                        .prev_op = prev_op,
-                        .layer = layer_idx,
-                        .b_x = bx,
-                        .b_y = by,
-                        .bar_idx = bar_idx,
-                        .expected = expected
-                    };
-                }
-            }
+            add_instructions_2d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks_x, num_blocks_y);
             prev_op = op;
         }
  
@@ -1885,17 +1599,7 @@ stream_t** schedule_instructions(int seq_len) {
             int expected = grid_prev.x * grid_prev.y;
             int num_blocks = B;
  
-            for (int block = 0; block < num_blocks; block++) {
-                all_instructions[instruction_count++] = (instruction_t){
-                    .op = op,
-                    .prev_op = prev_op,
-                    .layer = layer_idx,
-                    .b_x = block,
-                    .b_y = -1,
-                    .bar_idx = bar_idx,
-                    .expected = expected
-                };
-            }
+            add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
         }
     }
@@ -1907,17 +1611,7 @@ stream_t** schedule_instructions(int seq_len) {
         int expected = B;
         int num_blocks = CEIL_DIV(B * S, thr);
  
-        for (int block = 0; block < num_blocks; block++) {
-            all_instructions[instruction_count++] = (instruction_t){
-                .op = op,
-                .prev_op = prev_op,
-                .layer = -1,
-                .b_x = block,
-                .b_y = -1,
-                .bar_idx = bar_idx,
-                .expected = expected
-            };
-        }
+        add_instructions_1d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks);
         prev_op = op;
     }
  
@@ -2157,196 +1851,350 @@ __device__ void execute_instruction(
     switch (instr.op) {
         case 1: {
             // OP 1: Embedding forward
-            embedding_forward_device(MK_ACT_ENCODED(acts), d_input_tokens, MK_WTE(params), MK_WPE(params), S, h, V, MK_N_POSITIONS, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                embedding_forward_device(MK_ACT_ENCODED(acts), d_input_tokens, MK_WTE(params), MK_WPE(params), S, h, V, MK_N_POSITIONS, b_x);
+            }
             break;
         }
  
         case 2: {
             // OP 2: LayerNorm 1
             float *res = (instr.layer == 0) ? MK_ACT_ENCODED(acts) : MK_ACT_RES3(acts, instr.layer - 1);
-            layernorm_forward_device(MK_ACT_LN1(acts, instr.layer), res, MK_LN1_W(params, instr.layer), MK_LN1_B(params, instr.layer), MK_ACT_LN1_MEAN(acts, instr.layer), MK_ACT_LN1_RSTD(acts, instr.layer), S, h, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                layernorm_forward_device(MK_ACT_LN1(acts, instr.layer), res, MK_LN1_W(params, instr.layer), MK_LN1_B(params, instr.layer), MK_ACT_LN1_MEAN(acts, instr.layer), MK_ACT_LN1_RSTD(acts, instr.layer), S, h, b_x);
+            }
             break;
         }
  
         case 3: {
             // OP 3: QKV projection
-            mlp_forward_device(MK_ACT_QKV(acts, instr.layer), MK_ACT_LN1(acts, instr.layer), MK_QKV_W(params, instr.layer), MK_QKV_B(params, instr.layer), B, S, h, h * 3, instr.b_x, instr.b_y, shared_mem);
+            dim3 grid = MLP_FORWARD_GRID(h * 3, B, S);
+            int num_blocks_x = grid.x;
+            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
+            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_forward_device(MK_ACT_QKV(acts, instr.layer), MK_ACT_LN1(acts, instr.layer), MK_QKV_W(params, instr.layer), MK_QKV_B(params, instr.layer), B, S, h, h * 3, b_x, b_y, shared_mem);
+            }
             break;
         }
  
         case 4: {
             // OP 4: Attention
-            attention_forward_device(MK_ACT_ATTY(acts, instr.layer), MK_ACT_PREATT(acts, instr.layer), MK_ACT_ATT(acts, instr.layer), MK_ACT_QKV(acts, instr.layer), B, S, n_head, h, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                attention_forward_device(MK_ACT_ATTY(acts, instr.layer), MK_ACT_PREATT(acts, instr.layer), MK_ACT_ATT(acts, instr.layer), MK_ACT_QKV(acts, instr.layer), B, S, n_head, h, b_x);
+            }
             break;
         }
  
         case 5: {
             // OP 5: Attention projection
-            mlp_forward_device(MK_ACT_ATT_PROJ(acts, instr.layer), MK_ACT_ATTY(acts, instr.layer), MK_ATTN_PROJ_W(params, instr.layer), MK_ATTN_PROJ_B(params, instr.layer), B, S, h, h, instr.b_x, instr.b_y, shared_mem);
+            dim3 grid = MLP_FORWARD_GRID(h, B, S);
+            int num_blocks_x = grid.x;
+            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
+            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_forward_device(MK_ACT_ATT_PROJ(acts, instr.layer), MK_ACT_ATTY(acts, instr.layer), MK_ATTN_PROJ_W(params, instr.layer), MK_ATTN_PROJ_B(params, instr.layer), B, S, h, h, b_x, b_y, shared_mem);
+            }
             break;
         }
  
         case 6: {
             // OP 6: Residual 2
             float *res = (instr.layer == 0) ? MK_ACT_ENCODED(acts) : MK_ACT_RES3(acts, instr.layer - 1);
-            residual_forward_device(MK_ACT_RES2(acts, instr.layer), MK_ACT_ATT_PROJ(acts, instr.layer), res, B, S, h, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                residual_forward_device(MK_ACT_RES2(acts, instr.layer), MK_ACT_ATT_PROJ(acts, instr.layer), res, B, S, h, b_x);
+            }
             break;
         }
  
         case 7: {
             // OP 7: LayerNorm 2
-            layernorm_forward_device(MK_ACT_LN2(acts, instr.layer), MK_ACT_RES2(acts, instr.layer), MK_LN2_W(params, instr.layer), MK_LN2_B(params, instr.layer), MK_ACT_LN2_MEAN(acts, instr.layer), MK_ACT_LN2_RSTD(acts, instr.layer), S, h, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                layernorm_forward_device(MK_ACT_LN2(acts, instr.layer), MK_ACT_RES2(acts, instr.layer), MK_LN2_W(params, instr.layer), MK_LN2_B(params, instr.layer), MK_ACT_LN2_MEAN(acts, instr.layer), MK_ACT_LN2_RSTD(acts, instr.layer), S, h, b_x);
+            }
             break;
         }
  
         case 8: {
             // OP 8: MLP FC
-            mlp_forward_device(MK_ACT_MLP_FC(acts, instr.layer), MK_ACT_LN2(acts, instr.layer), MK_MLP_FC_W(params, instr.layer), MK_MLP_FC_B(params, instr.layer), B, S, h, h * 4, instr.b_x, instr.b_y, shared_mem);
+            dim3 grid = MLP_FORWARD_GRID(h * 4, B, S);
+            int num_blocks_x = grid.x;
+            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
+            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_forward_device(MK_ACT_MLP_FC(acts, instr.layer), MK_ACT_LN2(acts, instr.layer), MK_MLP_FC_W(params, instr.layer), MK_MLP_FC_B(params, instr.layer), B, S, h, h * 4, b_x, b_y, shared_mem);
+            }
             break;
         }
  
         case 9: {
             // OP 9: GELU
-            gelu_forward_device(MK_ACT_MLP_FC_GELU(acts, instr.layer), MK_ACT_MLP_FC(acts, instr.layer), B, S, h * 4, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                gelu_forward_device(MK_ACT_MLP_FC_GELU(acts, instr.layer), MK_ACT_MLP_FC(acts, instr.layer), B, S, h * 4, b_x);
+            }
             break;
         }
  
         case 10: {
             // OP 10: MLP projection
-            mlp_forward_device(MK_ACT_MLP_PROJ(acts, instr.layer), MK_ACT_MLP_FC_GELU(acts, instr.layer), MK_MLP_PROJ_W(params, instr.layer), MK_MLP_PROJ_B(params, instr.layer), B, S, h * 4, h, instr.b_x, instr.b_y, shared_mem);
+            dim3 grid = MLP_FORWARD_GRID(h, B, S);
+            int num_blocks_x = grid.x;
+            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
+            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_forward_device(MK_ACT_MLP_PROJ(acts, instr.layer), MK_ACT_MLP_FC_GELU(acts, instr.layer), MK_MLP_PROJ_W(params, instr.layer), MK_MLP_PROJ_B(params, instr.layer), B, S, h * 4, h, b_x, b_y, shared_mem);
+            }
             break;
         }
  
         case 11: {
             // OP 11: Residual 3
-            residual_forward_device(MK_ACT_RES3(acts, instr.layer), MK_ACT_MLP_PROJ(acts, instr.layer), MK_ACT_RES2(acts, instr.layer), B, S, h, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                residual_forward_device(MK_ACT_RES3(acts, instr.layer), MK_ACT_MLP_PROJ(acts, instr.layer), MK_ACT_RES2(acts, instr.layer), B, S, h, b_x);
+            }
             break;
         }
  
         case 12: {
             // OP 12: Final LayerNorm
-            layernorm_forward_device(MK_ACT_LN_F(acts), MK_ACT_RES3(acts, L - 1), MK_LN_F_W(params), MK_LN_F_B(params), MK_ACT_LN_F_MEAN(acts), MK_ACT_LN_F_RSTD(acts), S, h, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                layernorm_forward_device(MK_ACT_LN_F(acts), MK_ACT_RES3(acts, L - 1), MK_LN_F_W(params), MK_LN_F_B(params), MK_ACT_LN_F_MEAN(acts), MK_ACT_LN_F_RSTD(acts), S, h, b_x);
+            }
             break;
         }
  
         case 13: {
             // OP 13: Logits
-            mlp_forward_device(MK_ACT_LOGITS(acts), MK_ACT_LN_F(acts), MK_WTE(params), NULL, B, S, h, V, instr.b_x, instr.b_y, shared_mem);
+            dim3 grid = MLP_FORWARD_GRID(V, B, S);
+            int num_blocks_x = grid.x;
+            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
+            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_forward_device(MK_ACT_LOGITS(acts), MK_ACT_LN_F(acts), MK_WTE(params), NULL, B, S, h, V, b_x, b_y, shared_mem);
+            }
             break;
         }
  
         case 14: {
             // OP 14: Softmax
-            softmax_forward_device(MK_ACT_PROBS(acts), MK_ACT_LOGITS(acts), B, S, V, instr.b_x, shared_mem);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                softmax_forward_device(MK_ACT_PROBS(acts), MK_ACT_LOGITS(acts), B, S, V, b_x, shared_mem);
+            }
             break;
         }
  
         case 15: {
             // OP 15: Cross-entropy forward
-            cross_entropy_forward_device(MK_ACT_LOSSES(acts), MK_ACT_PROBS(acts), d_target_tokens, B, S, V, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                cross_entropy_forward_device(MK_ACT_LOSSES(acts), MK_ACT_PROBS(acts), d_target_tokens, B, S, V, b_x);
+            }
             break;
         }
  
         case 16: {
             // OP 16: Cross-entropy backward
-            cross_entropy_backward_device(MK_ACT_LOGITS(grad_acts), MK_ACT_PROBS(acts), d_target_tokens, B, S, V, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                cross_entropy_backward_device(MK_ACT_LOGITS(grad_acts), MK_ACT_PROBS(acts), d_target_tokens, B, S, V, b_x);
+            }
             break;
         }
  
         case 17: {
             // OP 17: Logits backward (input gradient)
-            mlp_backward_input_device(MK_ACT_LN_F(grad_acts), MK_ACT_LOGITS(grad_acts), MK_WTE(params), B, S, h, V, instr.b_x, instr.b_y, shared_mem);
+            dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
+            int num_blocks_x = grid.x;
+            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
+            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_backward_input_device(MK_ACT_LN_F(grad_acts), MK_ACT_LOGITS(grad_acts), MK_WTE(params), B, S, h, V, b_x, b_y, shared_mem);
+            }
             break;
         }
  
         case 18: {
             // OP 18: Embedding weight gradient
-            mlp_backward_weight_device(MK_WTE(grads), NULL, MK_ACT_LOGITS(grad_acts), MK_ACT_LN_F(acts), B, S, h, V, instr.b_x, instr.b_y, shared_mem);
+            dim3 grid = MLP_BACKWARD_WEIGHT_GRID(V, h);
+            int num_blocks_x = grid.x;
+            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
+            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_backward_weight_device(MK_WTE(grads), NULL, MK_ACT_LOGITS(grad_acts), MK_ACT_LN_F(acts), B, S, h, V, b_x, b_y, shared_mem);
+            }
             break;
         }
  
         case 19: {
             // OP 19: Final LayerNorm backward
-            layernorm_backward_device(MK_ACT_RES3(grad_acts, L - 1), MK_LN_F_W(grads), MK_LN_F_B(grads), MK_ACT_LN_F(grad_acts), MK_ACT_RES3(acts, L - 1), MK_LN_F_W(params), MK_ACT_LN_F_MEAN(acts), MK_ACT_LN_F_RSTD(acts), B, S, h, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                layernorm_backward_device(MK_ACT_RES3(grad_acts, L - 1), MK_LN_F_W(grads), MK_LN_F_B(grads), MK_ACT_LN_F(grad_acts), MK_ACT_RES3(acts, L - 1), MK_LN_F_W(params), MK_ACT_LN_F_MEAN(acts), MK_ACT_LN_F_RSTD(acts), B, S, h, b_x);
+            }
             break;
         }
  
         case 20: {
             // OP 20: Residual backward (res_3)
-            residual_backward_device(MK_ACT_RES2(grad_acts, instr.layer), MK_ACT_MLP_PROJ(grad_acts, instr.layer), MK_ACT_RES3(grad_acts, instr.layer), B * S * h, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                residual_backward_device(MK_ACT_RES2(grad_acts, instr.layer), MK_ACT_MLP_PROJ(grad_acts, instr.layer), MK_ACT_RES3(grad_acts, instr.layer), B * S * h, b_x);
+            }
             break;
         }
  
         case 21: {
             // OP 21: MLP projection backward input
-            mlp_backward_input_device(MK_ACT_MLP_FC_GELU(grad_acts, instr.layer), MK_ACT_MLP_PROJ(grad_acts, instr.layer), MK_MLP_PROJ_W(params, instr.layer), B, S, h * 4, h, instr.b_x, instr.b_y, shared_mem);
+            dim3 grid = MLP_BACKWARD_INPUT_GRID(h * 4, B, S);
+            int num_blocks_x = grid.x;
+            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
+            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_backward_input_device(MK_ACT_MLP_FC_GELU(grad_acts, instr.layer), MK_ACT_MLP_PROJ(grad_acts, instr.layer), MK_MLP_PROJ_W(params, instr.layer), B, S, h * 4, h, b_x, b_y, shared_mem);
+            }
             break;
         }
  
         case 22: {
             // OP 22: MLP projection backward weight
-            mlp_backward_weight_device(MK_MLP_PROJ_W(grads, instr.layer), MK_MLP_PROJ_B(grads, instr.layer), MK_ACT_MLP_PROJ(grad_acts, instr.layer), MK_ACT_MLP_FC_GELU(acts, instr.layer), B, S, h * 4, h, instr.b_x, instr.b_y, shared_mem);
+            dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h, h * 4);
+            int num_blocks_x = grid.x;
+            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
+            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_backward_weight_device(MK_MLP_PROJ_W(grads, instr.layer), MK_MLP_PROJ_B(grads, instr.layer), MK_ACT_MLP_PROJ(grad_acts, instr.layer), MK_ACT_MLP_FC_GELU(acts, instr.layer), B, S, h * 4, h, b_x, b_y, shared_mem);
+            }
             break;
         }
  
         case 23: {
             // OP 23: GELU backward
-            gelu_backward_device(MK_ACT_MLP_FC(grad_acts, instr.layer), MK_ACT_MLP_FC(acts, instr.layer), MK_ACT_MLP_FC_GELU(grad_acts, instr.layer), B * S * 4 * h, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                gelu_backward_device(MK_ACT_MLP_FC(grad_acts, instr.layer), MK_ACT_MLP_FC(acts, instr.layer), MK_ACT_MLP_FC_GELU(grad_acts, instr.layer), B * S * 4 * h, b_x);
+            }
             break;
         }
  
         case 24: {
             // OP 24: MLP FC backward input
-            mlp_backward_input_device(MK_ACT_LN2(grad_acts, instr.layer), MK_ACT_MLP_FC(grad_acts, instr.layer), MK_MLP_FC_W(params, instr.layer), B, S, h, h * 4, instr.b_x, instr.b_y, shared_mem);
+            dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
+            int num_blocks_x = grid.x;
+            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
+            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_backward_input_device(MK_ACT_LN2(grad_acts, instr.layer), MK_ACT_MLP_FC(grad_acts, instr.layer), MK_MLP_FC_W(params, instr.layer), B, S, h, h * 4, b_x, b_y, shared_mem);
+            }
             break;
         }
  
         case 25: {
             // OP 25: MLP FC backward weight
-            mlp_backward_weight_device(MK_MLP_FC_W(grads, instr.layer), MK_MLP_FC_B(grads, instr.layer), MK_ACT_MLP_FC(grad_acts, instr.layer), MK_ACT_LN2(acts, instr.layer), B, S, h, h * 4, instr.b_x, instr.b_y, shared_mem);
+            dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h * 4, h);
+            int num_blocks_x = grid.x;
+            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
+            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_backward_weight_device(MK_MLP_FC_W(grads, instr.layer), MK_MLP_FC_B(grads, instr.layer), MK_ACT_MLP_FC(grad_acts, instr.layer), MK_ACT_LN2(acts, instr.layer), B, S, h, h * 4, b_x, b_y, shared_mem);
+            }
             break;
         }
  
         case 26: {
             // OP 26: LayerNorm 2 backward
-            layernorm_backward_device(MK_ACT_RES2(grad_acts, instr.layer), MK_LN2_W(grads, instr.layer), MK_LN2_B(grads, instr.layer), MK_ACT_LN2(grad_acts, instr.layer), MK_ACT_RES2(acts, instr.layer), MK_LN2_W(params, instr.layer), MK_ACT_LN2_MEAN(acts, instr.layer), MK_ACT_LN2_RSTD(acts, instr.layer), B, S, h, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                layernorm_backward_device(MK_ACT_RES2(grad_acts, instr.layer), MK_LN2_W(grads, instr.layer), MK_LN2_B(grads, instr.layer), MK_ACT_LN2(grad_acts, instr.layer), MK_ACT_RES2(acts, instr.layer), MK_LN2_W(params, instr.layer), MK_ACT_LN2_MEAN(acts, instr.layer), MK_ACT_LN2_RSTD(acts, instr.layer), B, S, h, b_x);
+            }
             break;
         }
  
         case 27: {
             // OP 27: Residual backward (res_2)
             float *g_res = (instr.layer == 0) ? MK_ACT_ENCODED(grad_acts) : MK_ACT_RES3(grad_acts, instr.layer - 1);
-            residual_backward_device(g_res, MK_ACT_ATT_PROJ(grad_acts, instr.layer), MK_ACT_RES2(grad_acts, instr.layer), B * S * h, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                residual_backward_device(g_res, MK_ACT_ATT_PROJ(grad_acts, instr.layer), MK_ACT_RES2(grad_acts, instr.layer), B * S * h, b_x);
+            }
             break;
         }
  
         case 28: {
             // OP 28: Attention projection backward input
-            mlp_backward_input_device(MK_ACT_ATTY(grad_acts, instr.layer), MK_ACT_ATT_PROJ(grad_acts, instr.layer), MK_ATTN_PROJ_W(params, instr.layer), B, S, h, h, instr.b_x, instr.b_y, shared_mem);
+            dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
+            int num_blocks_x = grid.x;
+            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
+            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_backward_input_device(MK_ACT_ATTY(grad_acts, instr.layer), MK_ACT_ATT_PROJ(grad_acts, instr.layer), MK_ATTN_PROJ_W(params, instr.layer), B, S, h, h, b_x, b_y, shared_mem);
+            }
             break;
         }
  
         case 29: {
             // OP 29: Attention projection backward weight
-            mlp_backward_weight_device(MK_ATTN_PROJ_W(grads, instr.layer), MK_ATTN_PROJ_B(grads, instr.layer), MK_ACT_ATT_PROJ(grad_acts, instr.layer), MK_ACT_ATTY(acts, instr.layer), B, S, h, h, instr.b_x, instr.b_y, shared_mem);
+            dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h, h);
+            int num_blocks_x = grid.x;
+            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
+            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_backward_weight_device(MK_ATTN_PROJ_W(grads, instr.layer), MK_ATTN_PROJ_B(grads, instr.layer), MK_ACT_ATT_PROJ(grad_acts, instr.layer), MK_ACT_ATTY(acts, instr.layer), B, S, h, h, b_x, b_y, shared_mem);
+            }
             break;
         }
  
         case 30: {
             // OP 30: Attention backward
-            attention_backward_device(MK_ACT_QKV(grad_acts, instr.layer), MK_ACT_PREATT(grad_acts, instr.layer), MK_ACT_ATT(grad_acts, instr.layer), MK_ACT_ATTY(grad_acts, instr.layer), MK_ACT_QKV(acts, instr.layer), MK_ACT_ATT(acts, instr.layer), B, S, h, n_head, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                attention_backward_device(MK_ACT_QKV(grad_acts, instr.layer), MK_ACT_PREATT(grad_acts, instr.layer), MK_ACT_ATT(grad_acts, instr.layer), MK_ACT_ATTY(grad_acts, instr.layer), MK_ACT_QKV(acts, instr.layer), MK_ACT_ATT(acts, instr.layer), B, S, h, n_head, b_x);
+            }
             break;
         }
  
         case 31: {
             // OP 31: QKV backward input
-            mlp_backward_input_device(MK_ACT_LN1(grad_acts, instr.layer), MK_ACT_QKV(grad_acts, instr.layer), MK_QKV_W(params, instr.layer), B, S, h, h * 3, instr.b_x, instr.b_y, shared_mem);
+            dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
+            int num_blocks_x = grid.x;
+            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
+            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_backward_input_device(MK_ACT_LN1(grad_acts, instr.layer), MK_ACT_QKV(grad_acts, instr.layer), MK_QKV_W(params, instr.layer), B, S, h, h * 3, b_x, b_y, shared_mem);
+            }
             break;
         }
  
         case 32: {
             // OP 32: QKV backward weight
-            mlp_backward_weight_device(MK_QKV_W(grads, instr.layer), MK_QKV_B(grads, instr.layer), MK_ACT_QKV(grad_acts, instr.layer), MK_ACT_LN1(acts, instr.layer), B, S, h, h * 3, instr.b_x, instr.b_y, shared_mem);
+            dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h * 3, h);
+            int num_blocks_x = grid.x;
+            int start_linear = instr.start_b_y * num_blocks_x + instr.start_b_x;
+            int end_linear = instr.end_b_y * num_blocks_x + instr.end_b_x;
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++) {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_backward_weight_device(MK_QKV_W(grads, instr.layer), MK_QKV_B(grads, instr.layer), MK_ACT_QKV(grad_acts, instr.layer), MK_ACT_LN1(acts, instr.layer), B, S, h, h * 3, b_x, b_y, shared_mem);
+            }
             break;
         }
  
@@ -2354,13 +2202,17 @@ __device__ void execute_instruction(
             // OP 33: LayerNorm 1 backward
             float *g_res = (instr.layer == 0) ? MK_ACT_ENCODED(grad_acts) : MK_ACT_RES3(grad_acts, instr.layer - 1);
             float *res = (instr.layer == 0) ? MK_ACT_ENCODED(acts) : MK_ACT_RES3(acts, instr.layer - 1);
-            layernorm_backward_device(g_res, MK_LN1_W(grads, instr.layer), MK_LN1_B(grads, instr.layer), MK_ACT_LN1(grad_acts, instr.layer), res, MK_LN1_W(params, instr.layer), MK_ACT_LN1_MEAN(acts, instr.layer), MK_ACT_LN1_RSTD(acts, instr.layer), B, S, h, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                layernorm_backward_device(g_res, MK_LN1_W(grads, instr.layer), MK_LN1_B(grads, instr.layer), MK_ACT_LN1(grad_acts, instr.layer), res, MK_LN1_W(params, instr.layer), MK_ACT_LN1_MEAN(acts, instr.layer), MK_ACT_LN1_RSTD(acts, instr.layer), B, S, h, b_x);
+            }
             break;
         }
  
         case 34: {
             // OP 34: Embedding backward
-            embedding_backward_device(MK_WTE(grads), MK_WPE(grads), MK_ACT_ENCODED(grad_acts), d_input_tokens, B, S, h, instr.b_x);
+            for (int b_x = instr.start_b_x; b_x <= instr.end_b_x; b_x++) {
+                embedding_backward_device(MK_WTE(grads), MK_WPE(grads), MK_ACT_ENCODED(grad_acts), d_input_tokens, B, S, h, b_x);
+            }
             break;
         }
  
