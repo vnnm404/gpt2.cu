@@ -1167,7 +1167,7 @@ stream_t** schedule_instructions(int seq_len) {
     int h = config.n_embd;
     int n_head = config.n_head;
     int V = config.vocab_size;
-    int thr = 256;
+    int thr = 1024;
  
     // Initialize streams for each SM
     for (int sm = 0; sm < NUM_SM; sm++) {
@@ -1689,7 +1689,7 @@ stream_t** schedule_instructions(int seq_len) {
  
     printf("Scheduled %d instructions across %d SMs\n", instruction_count, NUM_SM);
     for (int sm = 0; sm < NUM_SM; sm++) {
-        printf("SM %d: %d, ", sm, streams[sm]->n);
+        printf("%d, ", streams[sm]->n);
     }
     printf("\n");
  
@@ -1803,7 +1803,8 @@ __device__ void execute_stream(
     //     printf("SM %d starting execution of %d instructions\n", blockIdx.x, stream->n);
     // }
  
-    for (int i = 0; i < stream->n; i++) {
+    int n = stream->n;
+    for (int i = 0; i < n; i++) {
         instruction_t instr = stream->instructions[i];
         execute_instruction(params, grads, acts, grad_acts, seq_len, d_input_tokens, d_target_tokens, bar, instr);
     }
