@@ -1617,8 +1617,9 @@ stream_t** schedule_instructions(int seq_len) {
  
     printf("Scheduled %d instructions across %d SMs\n", instruction_count, NUM_SM);
     for (int sm = 0; sm < NUM_SM; sm++) {
-        printf("SM %d: %d instructions\n", sm, streams[sm]->n);
+        printf("%d, ", streams[sm]->n);
     }
+    printf("\n");
  
     // Allocate device memory for streams and instructions
     stream_t **d_streams_ptr;
