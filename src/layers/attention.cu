@@ -55,37 +55,26 @@ __device__ void attention_forward_device(float* out, float* preatt, float* att,
     // Pass 2: Calculate exp and sum for softmax
     float expsum = 0.0f;
     for (int t2 = 0; t2 <= t; t2++) {
-        float expv = expf(preatt_bth[t2] - maxval);
+        float expv = __expf(preatt_bth[t2] - maxval);
         expsum += expv;
         att_bth[t2] = expv;
     }
     float expsum_inv = (expsum == 0.0f) ? 0.0f : 1.0f / expsum;
     
-    // Pass 3: Normalize to get softmax (with causal mask)
-    for (int t2 = 0; t2 < T; t2++) {
-        if (t2 <= t) {
-            att_bth[t2] *= expsum_inv;
-        } else {
-            att_bth[t2] = 0.0f; // Causal mask
-        }
-    }
-    
-    // Pass 4: Accumulate weighted values into output
+    // Pass 3: Normalize, set causal mask, and accumulate values (fused)
     float* out_bth = out + b * T * C + t * C + h * hs;
+    for (int i = 0; i < hs; i++) out_bth[i] = 0.0f;
     
-    // Initialize output to zero
-    for (int i = 0; i < hs; i++) {
-        out_bth[i] = 0.0f;
-    }
-    
-    // Accumulate weighted values
     for (int t2 = 0; t2 <= t; t2++) {
-        const float* value_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C * 2; // +C*2 for value offset
-        float att_btht2 = att_bth[t2];
+        float att_btht2 = att_bth[t2] * expsum_inv;
+        att_bth[t2] = att_btht2;
+        const float* value_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C * 2;
         for (int i = 0; i < hs; i++) {
             out_bth[i] += att_btht2 * value_t2[i];
         }
     }
+    // Set causal mask for remaining positions
+    for (int t2 = t + 1; t2 < T; t2++) att_bth[t2] = 0.0f;
 }
 
 // CUDA kernel for attention forward pass
@@ -137,37 +126,26 @@ __global__ void attention_forward(float* out, float* preatt, float* att,
     // Pass 2: Calculate exp and sum for softmax
     float expsum = 0.0f;
     for (int t2 = 0; t2 <= t; t2++) {
-        float expv = expf(preatt_bth[t2] - maxval);
+        float expv = __expf(preatt_bth[t2] - maxval);
         expsum += expv;
         att_bth[t2] = expv;
     }
     float expsum_inv = (expsum == 0.0f) ? 0.0f : 1.0f / expsum;
     
-    // Pass 3: Normalize to get softmax (with causal mask)
-    for (int t2 = 0; t2 < T; t2++) {
-        if (t2 <= t) {
-            att_bth[t2] *= expsum_inv;
-        } else {
-            att_bth[t2] = 0.0f; // Causal mask
-        }
-    }
-    
-    // Pass 4: Accumulate weighted values into output
+    // Pass 3: Normalize, set causal mask, and accumulate values (fused)
     float* out_bth = out + b * T * C + t * C + h * hs;
+    for (int i = 0; i < hs; i++) out_bth[i] = 0.0f;
     
-    // Initialize output to zero
-    for (int i = 0; i < hs; i++) {
-        out_bth[i] = 0.0f;
-    }
-    
-    // Accumulate weighted values
     for (int t2 = 0; t2 <= t; t2++) {
-        const float* value_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C * 2; // +C*2 for value offset
-        float att_btht2 = att_bth[t2];
+        float att_btht2 = att_bth[t2] * expsum_inv;
+        att_bth[t2] = att_btht2;
+        const float* value_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C * 2;
         for (int i = 0; i < hs; i++) {
             out_bth[i] += att_btht2 * value_t2[i];
         }
     }
+    // Set causal mask for remaining positions
+    for (int t2 = t + 1; t2 < T; t2++) att_bth[t2] = 0.0f;
 }
 
 // Device function for attention backward pass - Megakernel compatible
@@ -183,59 +161,48 @@ __device__ void attention_backward_device(float* g_inp, float* g_preatt, float* 
                                    int B, int T, int C, int NH,
                                    int blockIdx_x) {
     int idx = blockIdx_x * blockDim.x + threadIdx.x;
-    int total_threads = B * T * NH;
+    if (idx >= B * T * NH) return;
     
-    if (idx >= total_threads) return;
-    
-    // Decode indices: idx = b * T * NH + t * NH + h
     int h = idx % NH;
     int t = (idx / NH) % T;
     int b = idx / (NH * T);
-    
-    int C3 = C * 3;
-    int hs = C / NH; // head size
+    int hs = C / NH;
     float scale = 1.0f / sqrtf((float)hs);
     
-    const float* att_bth = att + b * NH * T * T + h * T * T + t * T;
-    float* g_att_bth = g_att + b * NH * T * T + h * T * T + t * T;
-    float* g_preatt_bth = g_preatt + b * NH * T * T + h * T * T + t * T;
-    float* g_query_t = g_inp + b * T * C3 + t * C3 + h * hs;
-    const float* query_t = inp + b * T * C3 + t * C3 + h * hs;
-    
-    // Backward pass 4: through the value accumulation
-    const float* g_out_bth = g_out + b * T * C + t * C + h * hs;
+    // Compute g_att[t, t2] = dot(value[t2], g_out[t]) - direct write, no atomic needed
     for (int t2 = 0; t2 <= t; t2++) {
-        const float* value_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C * 2; // +C*2 because it's value
-        float* g_value_t2 = g_inp + b * T * C3 + t2 * C3 + h * hs + C * 2;
+        float acc = 0.0f;
         for (int i = 0; i < hs; i++) {
-            // in the forward pass this was:
-            // out_bth[i] += att_bth[t2] * value_t2[i];
-            // so now we have:
-            atomicAdd(&g_att_bth[t2], value_t2[i] * g_out_bth[i]);
-            atomicAdd(&g_value_t2[i], att_bth[t2] * g_out_bth[i]);
+            acc += inp[(b*T+t2)*C*3 + h*hs + C*2 + i] * g_out[(b*T+t)*C + h*hs + i];
         }
+        g_att[(b*NH+h)*T*T + t*T + t2] = acc;
     }
     
-    // Backward pass 2 & 3: the softmax
-    // note that softmax (like e.g. tanh) doesn't need the input (preatt) to backward
+    // Compute g_preatt using O(n) softmax backward - direct write, no atomic needed
+    float ds = 0.0f;
     for (int t2 = 0; t2 <= t; t2++) {
-        for (int t3 = 0; t3 <= t; t3++) {
-            float indicator = (t2 == t3) ? 1.0f : 0.0f;
-            float local_derivative = att_bth[t2] * (indicator - att_bth[t3]);
-            atomicAdd(&g_preatt_bth[t3], local_derivative * g_att_bth[t2]);
-        }
+        ds += att[(b*NH+h)*T*T + t*T + t2] * g_att[(b*NH+h)*T*T + t*T + t2];
+    }
+    for (int t2 = 0; t2 <= t; t2++) {
+        g_preatt[(b*NH+h)*T*T + t*T + t2] = att[(b*NH+h)*T*T + t*T + t2] * (g_att[(b*NH+h)*T*T + t*T + t2] - ds);
     }
     
-    // Backward pass 1: the query @ key matmul
+    // g_query[t]: each thread owns its g_query[t], no atomic needed
+    for (int i = 0; i < hs; i++) {
+        float g_q = 0.0f;
+        for (int t2 = 0; t2 <= t; t2++) {
+            g_q += inp[(b*T+t2)*C*3 + h*hs + C + i] * g_preatt[(b*NH+h)*T*T + t*T + t2];
+        }
+        g_inp[(b*T+t)*C*3 + h*hs + i] = g_q * scale;
+    }
+    
+    // g_key[t] and g_value[t]: need to sum over all tp >= t, use atomics
     for (int t2 = 0; t2 <= t; t2++) {
-        const float* key_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C; // +C because it's key
-        float* g_key_t2 = g_inp + b * T * C3 + t2 * C3 + h * hs + C; // +C because it's key
+        float g_preatt_val = g_preatt[(b*NH+h)*T*T + t*T + t2] * scale;
+        float att_val = att[(b*NH+h)*T*T + t*T + t2];
         for (int i = 0; i < hs; i++) {
-            // in the forward pass this was:
-            // preatt_bth[t2] += (query_t[i] * key_t2[i]) * scale;
-            // so now we have:
-            atomicAdd(&g_query_t[i], key_t2[i] * g_preatt_bth[t2] * scale);
-            atomicAdd(&g_key_t2[i], query_t[i] * g_preatt_bth[t2] * scale);
+            atomicAdd(&g_inp[(b*T+t2)*C*3 + h*hs + C + i], inp[(b*T+t)*C*3 + h*hs + i] * g_preatt_val);
+            atomicAdd(&g_inp[(b*T+t2)*C*3 + h*hs + C*2 + i], att_val * g_out[(b*T+t)*C + h*hs + i]);
         }
     }
 }
@@ -252,59 +219,48 @@ __global__ void attention_backward(float* g_inp, float* g_preatt, float* g_att,
                                    const float* g_out, const float* inp, const float* att,
                                    int B, int T, int C, int NH) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total_threads = B * T * NH;
+    if (idx >= B * T * NH) return;
     
-    if (idx >= total_threads) return;
-    
-    // Decode indices: idx = b * T * NH + t * NH + h
     int h = idx % NH;
     int t = (idx / NH) % T;
     int b = idx / (NH * T);
-    
-    int C3 = C * 3;
-    int hs = C / NH; // head size
+    int hs = C / NH;
     float scale = 1.0f / sqrtf((float)hs);
     
-    const float* att_bth = att + b * NH * T * T + h * T * T + t * T;
-    float* g_att_bth = g_att + b * NH * T * T + h * T * T + t * T;
-    float* g_preatt_bth = g_preatt + b * NH * T * T + h * T * T + t * T;
-    float* g_query_t = g_inp + b * T * C3 + t * C3 + h * hs;
-    const float* query_t = inp + b * T * C3 + t * C3 + h * hs;
-    
-    // Backward pass 4: through the value accumulation
-    const float* g_out_bth = g_out + b * T * C + t * C + h * hs;
+    // Compute g_att[t, t2] = dot(value[t2], g_out[t]) - direct write, no atomic needed
     for (int t2 = 0; t2 <= t; t2++) {
-        const float* value_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C * 2; // +C*2 because it's value
-        float* g_value_t2 = g_inp + b * T * C3 + t2 * C3 + h * hs + C * 2;
+        float acc = 0.0f;
         for (int i = 0; i < hs; i++) {
-            // in the forward pass this was:
-            // out_bth[i] += att_bth[t2] * value_t2[i];
-            // so now we have:
-            atomicAdd(&g_att_bth[t2], value_t2[i] * g_out_bth[i]);
-            atomicAdd(&g_value_t2[i], att_bth[t2] * g_out_bth[i]);
+            acc += inp[(b*T+t2)*C*3 + h*hs + C*2 + i] * g_out[(b*T+t)*C + h*hs + i];
         }
+        g_att[(b*NH+h)*T*T + t*T + t2] = acc;
     }
     
-    // Backward pass 2 & 3: the softmax
-    // note that softmax (like e.g. tanh) doesn't need the input (preatt) to backward
+    // Compute g_preatt using O(n) softmax backward - direct write, no atomic needed
+    float ds = 0.0f;
     for (int t2 = 0; t2 <= t; t2++) {
-        for (int t3 = 0; t3 <= t; t3++) {
-            float indicator = (t2 == t3) ? 1.0f : 0.0f;
-            float local_derivative = att_bth[t2] * (indicator - att_bth[t3]);
-            atomicAdd(&g_preatt_bth[t3], local_derivative * g_att_bth[t2]);
-        }
+        ds += att[(b*NH+h)*T*T + t*T + t2] * g_att[(b*NH+h)*T*T + t*T + t2];
+    }
+    for (int t2 = 0; t2 <= t; t2++) {
+        g_preatt[(b*NH+h)*T*T + t*T + t2] = att[(b*NH+h)*T*T + t*T + t2] * (g_att[(b*NH+h)*T*T + t*T + t2] - ds);
     }
     
-    // Backward pass 1: the query @ key matmul
+    // g_query[t]: each thread owns its g_query[t], no atomic needed
+    for (int i = 0; i < hs; i++) {
+        float g_q = 0.0f;
+        for (int t2 = 0; t2 <= t; t2++) {
+            g_q += inp[(b*T+t2)*C*3 + h*hs + C + i] * g_preatt[(b*NH+h)*T*T + t*T + t2];
+        }
+        g_inp[(b*T+t)*C*3 + h*hs + i] = g_q * scale;
+    }
+    
+    // g_key[t] and g_value[t]: need to sum over all tp >= t, use atomics
     for (int t2 = 0; t2 <= t; t2++) {
-        const float* key_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C; // +C because it's key
-        float* g_key_t2 = g_inp + b * T * C3 + t2 * C3 + h * hs + C; // +C because it's key
+        float g_preatt_val = g_preatt[(b*NH+h)*T*T + t*T + t2] * scale;
+        float att_val = att[(b*NH+h)*T*T + t*T + t2];
         for (int i = 0; i < hs; i++) {
-            // in the forward pass this was:
-            // preatt_bth[t2] += (query_t[i] * key_t2[i]) * scale;
-            // so now we have:
-            atomicAdd(&g_query_t[i], key_t2[i] * g_preatt_bth[t2] * scale);
-            atomicAdd(&g_key_t2[i], query_t[i] * g_preatt_bth[t2] * scale);
+            atomicAdd(&g_inp[(b*T+t2)*C*3 + h*hs + C + i], inp[(b*T+t)*C*3 + h*hs + i] * g_preatt_val);
+            atomicAdd(&g_inp[(b*T+t2)*C*3 + h*hs + C*2 + i], att_val * g_out[(b*T+t)*C + h*hs + i]);
         }
     }
 }

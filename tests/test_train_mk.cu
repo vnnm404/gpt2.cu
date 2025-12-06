@@ -649,13 +649,13 @@ int main(int argc, char *argv[]) {
             }
         }
         
-        printf("SM Timing (step %d):\n", step);
-        for (int sm = 0; sm < NUM_SM; sm++) {
-            long long rel_start = h_sm_start_times[sm] - min_start;
-            long long rel_end = h_sm_end_times[sm] - min_start;
-            long long duration = h_sm_end_times[sm] - h_sm_start_times[sm];
-            printf("  SM %2d: start=%12lld, end=%12lld, duration=%12lld ms\n", sm, rel_start, rel_end, duration / 1000000);
-        }
+        // printf("SM Timing (step %d):\n", step);
+        // for (int sm = 0; sm < NUM_SM; sm++) {
+        //     long long rel_start = h_sm_start_times[sm] - min_start;
+        //     long long rel_end = h_sm_end_times[sm] - min_start;
+        //     long long duration = h_sm_end_times[sm] - h_sm_start_times[sm];
+        //     printf("  SM %2d: start=%12lld, end=%12lld, duration=%12lld ms\n", sm, rel_start, rel_end, duration / 1000000);
+        // }
 
         // Copy per-instruction timing data and write to timer.txt
         gpuErrchk(cudaMemcpy(h_bar_enter_time, d_bar_enter_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long), cudaMemcpyDeviceToHost));
@@ -1033,7 +1033,7 @@ void forward(const int *d_input_tokens, int seq_len)
     int n_head = config.n_head;
     int V = config.vocab_size;
 
-    int thr = 256;
+    int thr = 1024;
 
     embedding_forward<<<B, thr>>>(buffers.encoded.data, d_input_tokens, model.emb.wte.data, model.emb.wpe.data, S, h, V, config.n_positions);
 
@@ -1076,7 +1076,7 @@ void cross_entropy(const int *d_target_tokens, int seq_len) {
     int S = seq_len;
     int V = config.vocab_size;
 
-    int thr = 256;
+    int thr = 1024;
     cross_entropy_forward<<<CEIL_DIV(B * S, thr), thr>>>(buffers.losses.data, buffers.probs.data, d_target_tokens, B, S, V);
 }
 
@@ -1088,7 +1088,7 @@ void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len
     int n_head = config.n_head;
     int V = config.vocab_size;
 
-    int thr = 256;
+    int thr = 1024;
 
     cross_entropy_backward<<<CEIL_DIV(B * S, thr), thr>>>(g_buffers.logits.data, buffers.probs.data, d_target_tokens, B, S, V);
 
