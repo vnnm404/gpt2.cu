@@ -490,6 +490,7 @@ int main(int argc, char *argv[]) {
     //     return 1;
     // }
     printf("Version: %d\n", state_header[1]);
+    printf("Model Params: %ld\n", model.num_parameters);
     
     int B = state_header[2];
     int T = state_header[3];
@@ -1168,6 +1169,7 @@ void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt) {
         opt->weight_decay,
         opt->t
     );
+    // gpuErrchk(cudaDeviceSynchronize());
     
     gpuErrchk(cudaGetLastError());
 }
@@ -1851,12 +1853,13 @@ stream_t** schedule_instructions(int seq_len) {
             for (int sm = 0; sm < NUM_SM; sm++) {
                 fprintf(f, "SM%d\n", sm);
                 for (int i = 0; i < streams[sm]->n; i++) {
-                    int op = streams[sm]->instructions[i].op;
-                    if (op >= 0 && op < num_op_names) {
-                        fprintf(f, "%d: %s\n", i, op_names[op]);
-                    } else {
-                        fprintf(f, "%d: OP%d\n", i, op);
-                    }
+                    instruction_t *instr = &streams[sm]->instructions[i];
+                    int op = instr->op;
+                    const char *op_name = (op >= 0 && op < num_op_names) ? op_names[op] : "UNKNOWN";
+                    fprintf(f, "%d: %s, op=%d, prev_op=%d, layer=%d, start_b_x=%d, end_b_x=%d, start_b_y=%d, end_b_y=%d, bar_idx=%d, expected=%d, inc=%d, instr_idx=%d\n",
+                            i, op_name, instr->op, instr->prev_op, instr->layer,
+                            instr->start_b_x, instr->end_b_x, instr->start_b_y, instr->end_b_y,
+                            instr->bar_idx, instr->expected, instr->inc, instr->instr_idx);
                 }
                 fprintf(f, "\n");
             }
