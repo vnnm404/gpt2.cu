@@ -1,30 +1,40 @@
 # gpt2.cu
 
-### Build
+## Setup
 
-```
-git clone https://github.com/vnnm404/gpt2.cu.git
+```bash
+git clone https://github.com/vnnm404/gpt2.cu.git && cd gpt2.cu
 
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.local/bin/env
-
-cd gpt2.cu
-mkdir models
-
-uv venv
-source .venv/bin/activate
-uv pip install torch transformers
+uv sync
 uv run python scripts/hf_to_bin.py
-
-mkdir build
-cd build
-cmake ..
-make inference -j `nproc` && ./programs/inference
 ```
 
-### TODO
+### Build + Run
+
+```bash
+# configure. (optionally, set your arch as needed eg -DCMAKE_CUDA_ARCHITECTURES="86")
+cmake -B build
+# build
+cmake --build build -j
+```
+
+```bash
+./build/programs/inference
+```
+
+### Tooling
+
+Generate `.clangd`:
+
+```bash
+uv run scripts/generate_clangd.py
+```
+
+For your LSP to cooperate you should make sure `compile_commands.json` exists (`cmake -B build` at minimum) so clangd sees per-target flags, architectures, includes, etc.
+
+## TODO
 
 - [ ] Clean up code
 - [ ] Better library structure
 - [ ] Checking for CUDA errors
-- [ ] Better build and setup scripts
+- [x] Better build and setup scripts

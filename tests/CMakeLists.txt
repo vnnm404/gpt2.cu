@@ -25,6 +25,6 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     # Enable proper CUDA device linking (MUST MATCH PROGRAMS)
     set_target_properties(${TEST_NAME} PROPERTIES 
         CUDA_SEPARABLE_COMPILATION ON
-        CUDA_ARCHITECTURES 86
+        CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
     )
 endforeach()

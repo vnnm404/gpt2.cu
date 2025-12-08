@@ -17,4 +17,5 @@ foreach(PROGRAM_SOURCE ${PROGRAM_SOURCES})
     # Set CUDA properties
     set_source_files_properties(${PROGRAM_SOURCE} PROPERTIES LANGUAGE CUDA)
     set_target_properties(${PROGRAM_NAME} PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+    set_target_properties(${PROGRAM_NAME} PROPERTIES CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
 endforeach()
