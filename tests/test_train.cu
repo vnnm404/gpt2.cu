@@ -440,7 +440,7 @@ static void forward(const int *d_input_tokens, int seq_len)
     int n_head = config.n_head;
     int V = config.vocab_size;
 
-    int thr = 256;
+    int thr = 1024;
 
     embedding_forward<<<B, thr>>>(buffers.encoded.data, d_input_tokens, model.emb.wte.data, model.emb.wpe.data, S, h, V, config.n_positions);
 
@@ -483,7 +483,7 @@ static void cross_entropy(const int *d_target_tokens, int seq_len) {
     int S = seq_len;
     int V = config.vocab_size;
 
-    int thr = 256;
+    int thr = 1024;
     cross_entropy_forward<<<CEIL_DIV(B * S, thr), thr>>>(buffers.losses.data, buffers.probs.data, d_target_tokens, B, S, V);
 }
 
@@ -495,7 +495,7 @@ static void backward(const int *d_input_tokens, const int *d_target_tokens, int 
     int n_head = config.n_head;
     int V = config.vocab_size;
 
-    int thr = 256;
+    int thr = 1024;
 
     cross_entropy_backward<<<CEIL_DIV(B * S, thr), thr>>>(g_buffers.logits.data, buffers.probs.data, d_target_tokens, B, S, V);
 
