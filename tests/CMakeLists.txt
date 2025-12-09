@@ -28,3 +28,13 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
     )
 endforeach()
+
+# lib w/ extern entrypoints
+add_library(mk_entrypoint SHARED test_train_mk.cu)
+set_target_properties(mk_entrypoint PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+    POSITION_INDEPENDENT_CODE ON
+)
+target_include_directories(mk_entrypoint PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
+target_link_libraries(mk_entrypoint gpt2 unity)

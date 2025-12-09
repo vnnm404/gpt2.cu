@@ -320,6 +320,10 @@ int *bar;  // [B, 1 + (L * 10 + 3) + 1 + (5 + L * 13 + 1)] global atomics
 stream_t *streams[NUM_SM];  // Host streams
 stream_t **d_streams;  // Device streams array
 
+// Expose device token buffers
+int *d_input_tokens = nullptr;
+int *d_target_tokens = nullptr;
+
 // Timing buffers for measuring time spent in each SM
 long long *d_sm_start_times;  // Start time for each SM (clock64)
 long long *d_sm_end_times;    // End time for each SM (clock64)
@@ -329,6 +333,29 @@ long long *d_bar_enter_time;   // Time before entering spin loop
 long long *d_bar_exit_time;    // Time after exiting spin loop  
 long long *d_instr_end_time;   // Time after instruction execution completes
 int *h_instr_counts;           // Number of instructions per SM (for output)
+
+// Expose handles
+typedef struct {
+    float *params;
+    float *grads;
+    float *acts;
+    float *grad_acts;
+    int *input_tokens;
+    int *target_tokens;
+    int *bar;
+    stream_t **streams;
+    long long *sm_start_times;
+    long long *sm_end_times;
+    long long *bar_enter_time;
+    long long *bar_exit_time;
+    long long *instr_end_time;
+    int bar_size;
+    int batch_size;
+    int seq_len;
+} mk_handles_t;
+
+static bool mk_prepared = false;
+static int mk_seq_len = MK_SEQ_LEN;
 
 // Function prototypes
 int setup_train_buffers(train_buffers_t *buffers, int seq_len);
@@ -397,6 +424,181 @@ __device__ void execute_instruction(
     long long *bar_exit_time,
     long long *instr_end_time
 );
+
+// Extern entrypoint.
+// Returns the cudaError code from the launch or synchronization.
+extern "C" int mk_launch(
+    dim3 grid,
+    dim3 block,
+    size_t shared_mem,
+    cudaStream_t stream,
+    float *params,
+    float *grads,
+    float *acts,
+    float *grad_acts,
+    int seq_len,
+    const int *d_input_tokens,
+    const int *d_target_tokens,
+    int *bar,
+    stream_t **streams,
+    long long *sm_start_times,
+    long long *sm_end_times,
+    long long *bar_enter_time,
+    long long *bar_exit_time,
+    long long *instr_end_time,
+    int sync_after
+) {
+    megakernel<<<grid, block, shared_mem, stream>>>(
+        params,
+        grads,
+        acts,
+        grad_acts,
+        seq_len,
+        d_input_tokens,
+        d_target_tokens,
+        bar,
+        streams,
+        sm_start_times,
+        sm_end_times,
+        bar_enter_time,
+        bar_exit_time,
+        instr_end_time);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess || !sync_after) {
+        return static_cast<int>(err);
+    }
+    return static_cast<int>(cudaDeviceSynchronize());
+}
+
+extern "C" int mk_setup(const char *weights_path, int seq_len) {
+    if (mk_prepared) {
+        return 0;
+    }
+
+    if (seq_len != MK_SEQ_LEN) {
+        fprintf(stderr, "mk_setup: seq_len must be %d for current layout\n", MK_SEQ_LEN);
+        return -1;
+    }
+
+    mk_seq_len = seq_len;
+
+    if (gpt2_initialize(&model, &config) != 0) {
+        fprintf(stderr, "mk_setup: failed to init model\n");
+        return -1;
+    }
+    if (gpt2_initialize(&g_model, &config) != 0) {
+        fprintf(stderr, "mk_setup: failed to init grad model\n");
+        gpt2_free(&model);
+        return -1;
+    }
+
+    const char *path = weights_path && weights_path[0] ? weights_path : "../models/gpt2-124M-weights.bin";
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        fprintf(stderr, "mk_setup: failed to open weights at %s\n", path);
+        return -1;
+    }
+    if (gpt2_load_weights(&model, file) != 0) {
+        fprintf(stderr, "mk_setup: failed to load weights\n");
+        fclose(file);
+        return -1;
+    }
+    fclose(file);
+
+    d_streams = schedule_instructions(seq_len);
+    setup_train_buffers(&buffers, seq_len);
+    setup_train_buffers(&g_buffers, seq_len);
+
+    int bar_size = config.batch_size * (1 + (config.n_layer * 10 + 3) + 1 + (5 + config.n_layer * 14 + 1));
+    gpuErrchk(cudaMalloc(&bar, bar_size * sizeof(int)));
+
+    gpuErrchk(cudaMalloc(&d_sm_start_times, NUM_SM * sizeof(long long)));
+    gpuErrchk(cudaMalloc(&d_sm_end_times, NUM_SM * sizeof(long long)));
+    gpuErrchk(cudaMalloc(&d_bar_enter_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long)));
+    gpuErrchk(cudaMalloc(&d_bar_exit_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long)));
+    gpuErrchk(cudaMalloc(&d_instr_end_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long)));
+
+    int tokens = config.batch_size * seq_len;
+    gpuErrchk(cudaMalloc(&d_input_tokens, tokens * sizeof(int)));
+    gpuErrchk(cudaMalloc(&d_target_tokens, tokens * sizeof(int)));
+
+    mk_prepared = true;
+    return 0;
+}
+
+extern "C" void mk_get_handles(mk_handles_t *out) {
+    if (!mk_prepared) {
+        return;
+    }
+    out->params = model.params_memory;
+    out->grads = g_model.params_memory;
+    out->acts = buffers.activations_memory;
+    out->grad_acts = g_buffers.activations_memory;
+    out->input_tokens = d_input_tokens;
+    out->target_tokens = d_target_tokens;
+    out->bar = bar;
+    out->streams = d_streams;
+    out->sm_start_times = d_sm_start_times;
+    out->sm_end_times = d_sm_end_times;
+    out->bar_enter_time = d_bar_enter_time;
+    out->bar_exit_time = d_bar_exit_time;
+    out->instr_end_time = d_instr_end_time;
+    out->bar_size = config.batch_size * (1 + (config.n_layer * 10 + 3) + 1 + (5 + config.n_layer * 14 + 1));
+    out->batch_size = config.batch_size;
+    out->seq_len = mk_seq_len;
+}
+
+extern "C" int mk_reset(void) {
+    if (!mk_prepared) {
+        return -1;
+    }
+
+    gpt2_zero_grad(&g_model);
+    zero_activation_grads(&g_buffers);
+
+    int bar_size = config.batch_size * (1 + (config.n_layer * 10 + 3) + 1 + (5 + config.n_layer * 14 + 1));
+    cudaError_t err = cudaMemset(bar, 0, bar_size * sizeof(int));
+    if (err != cudaSuccess) {
+        return static_cast<int>(err);
+    }
+    return 0;
+}
+
+extern "C" void mk_teardown(void) {
+    if (!mk_prepared) {
+        return;
+    }
+
+    // If a prior CUDA call failed (e.g., illegal access), bail early to avoid cascading errors during cleanup.
+    cudaError_t last = cudaGetLastError();
+    if (last != cudaSuccess) {
+        fprintf(stderr, "mk_teardown: skipping cleanup due to prior CUDA error: %s\n", cudaGetErrorString(last));
+        cudaGetLastError();
+        return;
+    }
+
+    if (d_streams) {
+        free_schedule(d_streams);
+        d_streams = nullptr;
+    }
+
+    gpuErrchk(cudaFree(bar));
+    gpuErrchk(cudaFree(d_sm_start_times));
+    gpuErrchk(cudaFree(d_sm_end_times));
+    gpuErrchk(cudaFree(d_bar_enter_time));
+    gpuErrchk(cudaFree(d_bar_exit_time));
+    gpuErrchk(cudaFree(d_instr_end_time));
+    gpuErrchk(cudaFree(d_input_tokens));
+    gpuErrchk(cudaFree(d_target_tokens));
+
+    free_train_buffers(&buffers);
+    free_train_buffers(&g_buffers);
+
+    gpt2_free(&model);
+    gpt2_free(&g_model);
+
+    mk_prepared = false;
+}
 
 // Helper: compute mean loss
 float compute_mean_loss(tensor_t *losses, int B, int S) {
@@ -1900,8 +2102,7 @@ stream_t** schedule_instructions(int seq_len) {
     }
  
     // Copy array of device stream pointers to device
-    gpuErrchk(cudaMemcpy(d_streams_ptr, d_stream_structs, NUM_SM * sizeof(stream_t*), cudaMemcpyHostToDevice));
- 
+    gpuErrchk(cudaMemcpy((void*)d_streams_ptr, (const void *) d_stream_structs, NUM_SM * sizeof(stream_t*), cudaMemcpyHostToDevice));
     return d_streams_ptr;
 }
  
