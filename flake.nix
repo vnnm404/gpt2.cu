@@ -120,7 +120,8 @@ EOF
         };
       in
       {
-        devShells.default = pkgs.mkShell {
+
+        devShells.default = pkgs.mkShellNoCC {
           packages = with pkgs; [
             cmake
             cmake-language-server
@@ -140,6 +141,7 @@ EOF
           CUDA_HOME = cudaPackages.cudatoolkit;
 
           NIX_ENFORCE_NO_NATIVE = "0";
+
           CC = "${gccHost}/bin/gcc";
           CXX = "${gccHost}/bin/g++";
           CUDACXX = "${cudaPackages.cudatoolkit}/bin/nvcc";
