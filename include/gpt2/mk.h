@@ -53,7 +53,7 @@ __global__ void megakernel(
     stream_t **streams
 );
 
-__device__ void execute_stream(
+__device__ __forceinline__ void execute_stream(
     float *params,
     float *grads,
 

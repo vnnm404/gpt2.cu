@@ -18,6 +18,17 @@
 #include "gpt2/layers/cross_entropy.h"
 #include "gpt2/layers/adamw.h"
 
+// Include layer implementations directly for proper inlining and optimization
+#include "layers/embedding.cu"
+#include "layers/layernorm.cu"
+#include "layers/mlp.cu"
+#include "layers/attention.cu"
+#include "layers/residual.cu"
+#include "layers/gelu.cu"
+#include "layers/softmax.cu"
+#include "layers/cross_entropy.cu"
+#include "layers/adamw.cu"
+
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
 #define NUM_SM 28
 
