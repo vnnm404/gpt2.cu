@@ -15,6 +15,11 @@ build/
 logs/
 .cache
 .direnv
+
 # this is generated platform specific
 .clangd
 compile_commands.json
+
+__pycache__
+profiles/
+/result/
