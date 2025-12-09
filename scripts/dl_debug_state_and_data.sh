@@ -7,7 +7,7 @@ SCRIPT_DIR=$(dirname "$(realpath "$0")")
 BASE_URL="https://huggingface.co/datasets/karpathy/llmc-starter-pack/resolve/main/"
 
 # Directory paths based on script location
-SAVE_DIR_PARENT="$SCRIPT_DIR/../models"
+SAVE_DIR_PARENT="$(realpath -m "$SCRIPT_DIR/../models")"
 SAVE_DIR_TINY="$SCRIPT_DIR/data/tinyshakespeare"
 SAVE_DIR_HELLA="$SCRIPT_DIR/data/hellaswag"
 
@@ -38,6 +38,10 @@ download_file() {
         FILE_PATH="${SAVE_DIR_PARENT}/${FILE_NAME}"
     fi
 
+    if [[ -f "$FILE_PATH" ]]; then
+      echo "$FILE_PATH exists"
+      return 0
+    fi
     # Download the file
     curl -s -L -o "$FILE_PATH" "$FILE_URL"
     echo "Downloaded $FILE_NAME to $FILE_PATH"
