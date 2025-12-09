@@ -918,7 +918,7 @@ __device__ void execute_stream(
         instruction_t instr = stream->instructions[i];
         execute_instruction(params, grads, acts, grad_acts, seq_len, d_input_tokens, d_target_tokens, 
 #ifdef PROFILE
-            , bar_enter_time, bar_exit_time, instr_end_time
+            bar_enter_time, bar_exit_time, instr_end_time,
 #endif
             bar, instr
         );
