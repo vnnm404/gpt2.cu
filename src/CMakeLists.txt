@@ -9,8 +9,8 @@ file(GLOB_RECURSE SOURCES
 
 add_library(gpt2 STATIC ${SOURCES})
 target_include_directories(gpt2 PUBLIC ${CMAKE_SOURCE_DIR}/include)
-target_compile_options(gpt2 PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Wno-deprecated-gpu-targets>)
-set_target_properties(gpt2 PROPERTIES LINKER_LANGUAGE CXX)
-set_target_properties(gpt2 PROPERTIES CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
-set_target_properties(gpt2 PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-set_target_properties(gpt2 PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+set_target_properties(gpt2 PROPERTIES 
+    LINKER_LANGUAGE CXX
+    CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+    CUDA_SEPARABLE_COMPILATION ON
+)

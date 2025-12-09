@@ -6,45 +6,16 @@ set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CUDA_STANDARD 11)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Enable CUDA separable compilation for device functions across files
-# set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
-
-# Set default build type to Release if not specified
-if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type (Debug or Release)" FORCE)
-endif()
-
+# Force Release build type with optimizations
+set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
-# Compiler flags configuration
-# Note: We use target properties to avoid generator expression issues
+# Optimization flags for C/CXX code
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -DNDEBUG -march=native")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -march=native")
 
-# Debug mode configuration
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-  message(STATUS "Enabling debug symbols and sanitizers")
-
-  # Set flags for C code
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O0 -Wall -Wextra -Wpedantic")
-
-  # Set flags for CUDA code
-  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -g -G -O0")
-
-  # Enable AddressSanitizer and UndefinedBehaviorSanitizer for C code
-  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address -fsanitize=undefined")
-  endif()
-
-  # Release mode configuration
-elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
-  message(STATUS "Enabling optimizations for release")
-
-  # Set flags for C code
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -DNDEBUG -march=native")
-
-  # Set flags for CUDA code
-  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 -DNDEBUG --use_fast_math")
-endif()
+# Optimization flags for CUDA code
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 -DNDEBUG --use_fast_math -Wno-deprecated-gpu-targets")
 
 # Include directories
 include_directories(${CMAKE_SOURCE_DIR}/include)

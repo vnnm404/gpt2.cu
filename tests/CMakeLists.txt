@@ -19,12 +19,9 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     # Link everything
     target_link_libraries(${TEST_NAME} gpt2 unity)
 
-    # DO NOT FORCE LINKER LANGUAGE TO C!
-    # This was the cause of your kernel differences.
-
-    # Enable proper CUDA device linking (MUST MATCH PROGRAMS)
+    # Set CUDA architectures and enable separable compilation
     set_target_properties(${TEST_NAME} PROPERTIES 
-        CUDA_SEPARABLE_COMPILATION ON
         CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+        CUDA_SEPARABLE_COMPILATION ON
     )
 endforeach()
