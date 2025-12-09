@@ -33,14 +33,14 @@
         };
 
         # Explicitly select cuda toolchain and a compatible host gcc
-        cudaPackages = pkgs.cudaPackages_13;
+        # cudaPackages = pkgs.cudaPackages_13;
+        cudaPackages = pkgs.cudaPackages_12_9;
         gccHost = pkgs.gcc13;
 
         generateClangd = pkgs.writeShellApplication {
           name = "generate-clangd";
           runtimeInputs = with pkgs; [
             git
-            stdenv.cc.cc
             findutils
             gnugrep
             gnused
@@ -60,7 +60,7 @@
             echo "Generating .clangd configuration in $root"
 
             # cpp stdlib paths (use whatever C++ compiler Nix stdenv provides)
-            : "\${CXX:=c++}"
+            : "\$\{CXX:=c++\}"
             CXX_PATHS="$($CXX -x c++ -E -v - </dev/null 2>&1 \
               | grep '^ /' | grep 'c++' | head -2)"
 
@@ -116,7 +116,6 @@ Diagnostics:
 EOF
 
             echo "Generated .clangd"
-            echo "Next: generate compile_commands: cmake -B build && ln -sf build/compile_commands.json ."
           '';
         };
       in
@@ -124,11 +123,12 @@ EOF
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             cmake
+            cmake-language-server
             gnumake
             git
             pkg-config
             cudaPackages.cudatoolkit
-            cudaPackages.cuda_cudart # includes libcudart_static.a
+            cudaPackages.cuda_cudart
             gccHost
           ];
 
@@ -137,6 +137,7 @@ EOF
           ];
 
           CPATH = pkgs.lib.makeSearchPath "include" [ ];
+          CUDA_HOME = cudaPackages.cudatoolkit;
 
           NIX_ENFORCE_NO_NATIVE = "0";
           CC = "${gccHost}/bin/gcc";
@@ -145,6 +146,9 @@ EOF
 
           shellHook = ''
             echo "CUDA toolkit version: ${cudaPackages.cudatoolkit.version}"
+            echo "nvcc: $(which nvcc)"
+            echo "gcc: $(which gcc)"
+            echo "g++: $(which g++)"
           '';
         };
 
