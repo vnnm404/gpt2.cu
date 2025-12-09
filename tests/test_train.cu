@@ -99,17 +99,17 @@ typedef struct {
 adamw_state_t opt_state;
 
 // Function prototypes
-int setup_train_buffers(train_buffers_t *buffers, int seq_len);
-void free_train_buffers(train_buffers_t *buffers);
-void forward(const int *d_input_tokens, int seq_len);
-void cross_entropy(const int *d_target_tokens, int seq_len);
-void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len);
-void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt);
-void gpt2_zero_grad(gpt2_t *grads);
-void zero_activation_grads(train_buffers_t *g_buffers);
+static int setup_train_buffers(train_buffers_t *buffers, int seq_len);
+static void free_train_buffers(train_buffers_t *buffers);
+static void forward(const int *d_input_tokens, int seq_len);
+static void cross_entropy(const int *d_target_tokens, int seq_len);
+static void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len);
+static void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt);
+static void gpt2_zero_grad(gpt2_t *grads);
+static void zero_activation_grads(train_buffers_t *g_buffers);
 
 // Helper: compute mean loss
-float compute_mean_loss(tensor_t *losses, int B, int S) {
+static float compute_mean_loss(tensor_t *losses, int B, int S) {
     float *cpu_losses = (float *)malloc(B * S * sizeof(float));
     cudaMemcpy(cpu_losses, losses->data, B * S * sizeof(float), cudaMemcpyDeviceToHost);
     
@@ -336,7 +336,7 @@ int main(int argc, char *argv[]) {
 
 // Implementation of helper functions from train.cu
 
-int setup_train_buffers(train_buffers_t *buffers, int seq_len)
+static int setup_train_buffers(train_buffers_t *buffers, int seq_len)
 {
     int B = config.batch_size;
     int S = seq_len;
@@ -400,7 +400,7 @@ int setup_train_buffers(train_buffers_t *buffers, int seq_len)
     return 0;
 }
 
-void free_train_buffers(train_buffers_t *buffers)
+static void free_train_buffers(train_buffers_t *buffers)
 {
     tensor_free(&buffers->encoded);
     for (int i = 0; i < config.n_layer; i++) {
@@ -431,7 +431,7 @@ void free_train_buffers(train_buffers_t *buffers)
     tensor_free(&buffers->losses);
 }
 
-void forward(const int *d_input_tokens, int seq_len)
+static void forward(const int *d_input_tokens, int seq_len)
 {
     int L = config.n_layer;
     int B = config.batch_size;
@@ -478,7 +478,7 @@ void forward(const int *d_input_tokens, int seq_len)
     softmax_forward<<<CEIL_DIV(B * S * V, thr), thr>>>(buffers.probs.data, buffers.logits.data, B, S, V);
 }
 
-void cross_entropy(const int *d_target_tokens, int seq_len) {
+static void cross_entropy(const int *d_target_tokens, int seq_len) {
     int B = config.batch_size;
     int S = seq_len;
     int V = config.vocab_size;
@@ -487,7 +487,7 @@ void cross_entropy(const int *d_target_tokens, int seq_len) {
     cross_entropy_forward<<<CEIL_DIV(B * S, thr), thr>>>(buffers.losses.data, buffers.probs.data, d_target_tokens, B, S, V);
 }
 
-void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len) {
+static void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len) {
     int L = config.n_layer;
     int B = config.batch_size;
     int S = seq_len;
@@ -545,7 +545,7 @@ void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len
     embedding_backward<<<CEIL_DIV(B * S, thr), thr>>>(g_model.emb.wte.data, g_model.emb.wpe.data, g_buffers.encoded.data, d_input_tokens, B, S, h);
 }
 
-void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt) {
+static void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt) {
     if (opt->m_memory == NULL) {
         size_t num_params = model->num_parameters;
         gpuErrchk(cudaMalloc(&opt->m_memory, num_params * sizeof(float)));
@@ -577,11 +577,11 @@ void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt) {
     gpuErrchk(cudaGetLastError());
 }
 
-void gpt2_zero_grad(gpt2_t *grads) {
+static void gpt2_zero_grad(gpt2_t *grads) {
     cudaMemset(grads->params_memory, 0, grads->num_parameters * sizeof(float));
 }
 
-void zero_activation_grads(train_buffers_t *g_buffers) {
+static void zero_activation_grads(train_buffers_t *g_buffers) {
     cudaMemset(g_buffers->encoded.data, 0, tensor_size(g_buffers->encoded) * sizeof(float));
     
     for (int i = 0; i < config.n_layer; i++) {

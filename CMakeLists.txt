@@ -6,6 +6,9 @@ set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CUDA_STANDARD 11)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Enable CUDA separable compilation for device functions across files
+# set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
+
 # Set default build type to Release if not specified
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type (Debug or Release)" FORCE)
@@ -49,7 +52,6 @@ include_directories(${CMAKE_SOURCE_DIR}/third_party)
 
 # Add subdirectories
 add_subdirectory(src)
-add_subdirectory(programs)
 add_subdirectory(tests)
 
 # compile_commands.json at repo root

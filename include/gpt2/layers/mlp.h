@@ -28,4 +28,16 @@ __global__ void mlp_backward_input(float *g_input, const float *g_out, const flo
 
 __global__ void mlp_backward_weight(float *g_weight, float *g_bias, const float *g_out, const float *input, int batch_size, int seq_len, int input_dim, int output_dim);
 
+__device__ void mlp_forward_device(float *out, const float *input, const float *w, const float *b, 
+                                    int batch_size, int seq_len, int input_dim, int output_dim,
+                                    int blockIdx_x, int blockIdx_y, float *shared_mem);
+
+__device__ void mlp_backward_input_device(float *g_input, const float *g_out, const float *weight, 
+                                          int batch_size, int seq_len, int input_dim, int output_dim,
+                                          int blockIdx_x, int blockIdx_y, float *shared_mem);
+
+__device__ void mlp_backward_weight_device(float *g_weight, float *g_bias, const float *g_out, const float *input, 
+                                           int batch_size, int seq_len, int input_dim, int output_dim,
+                                           int blockIdx_x, int blockIdx_y, float *shared_mem);
+
 #endif /* GPT2_LAYERS_MLP_H */
