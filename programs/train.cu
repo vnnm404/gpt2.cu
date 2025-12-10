@@ -1,5 +1,6 @@
 /* GPT-2 training executable - C implementation */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -206,6 +207,23 @@ __device__ void execute_instruction(
 
 __global__ void dummy_kernel() {}
 
+int join_path(char *out, size_t outsz, const char *root, const char *rel) {
+  if (!out || outsz == 0 || !root || !rel) {
+    return -1;
+  }
+
+  size_t len = strlen(root);
+  const char *sep = (len > 0 && root[len - 1] == '/') ? "" : "/";
+
+  int n = snprintf(out, outsz, "%s%s%s", root, sep, rel);
+
+  if (n < 0 || (size_t)n >= outsz) {
+    return -1;
+  }
+
+  return 0;
+}
+
 int main()
 {
     printf("GPT-2 training\n");
@@ -231,15 +249,25 @@ int main()
         return -1;
     }
 
-    FILE *file = fopen("../models/gpt2-124M-weights.bin", "rb");
+    // Load weights
+    const char *root = getenv("DATA_ROOT");
+    if (!root) root = "..";
+    char path[512];
+    if(join_path(path, sizeof(path), root, "models/gpt2-124M-weights.bin") != 0) {
+      fprintf(stderr, "Failed to build data root path\n");
+      return -1;
+    }
+
+    FILE *file = fopen(path, "rb");
     if (file == NULL) {
-        fprintf(stderr, "Failed to open weights file: %s\n", "../models/gpt2-124M-weights.bin");
+        fprintf(stderr, "Failed to open weights file '%s': %s\n",
+                path, strerror(errno));
+        gpt2_free(&model);
         return -1;
     }
 
-    // Load weights
     if (gpt2_load_weights(&model, file) != 0) {
-        fprintf(stderr, "Failed to load GPT-2 weights\n");
+        fprintf(stderr, "Failed to load GPT-2 weights from %s\n", path);
 
         gpt2_free(&model);
         fclose(file);
@@ -247,7 +275,8 @@ int main()
     }
     fclose(file);
 
-    printf("Model loaded successfully.\n");
+    printf("Model loaded from %s.\n", path);
+
 
     // Initialize AdamW optimizer state
     opt_state.learning_rate = 3e-4f;

@@ -38,6 +38,7 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
     // Allocate single contiguous block on GPU
     cudaError_t err = cudaMalloc(&model->params_memory, total_params * sizeof(float));
     if (err != cudaSuccess) {
+        fprintf(stderr, "Cuda err: %s\n", cudaGetErrorString(err));
         return -1;
     }
     
