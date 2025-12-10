@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: "3"
+
+vars:
+  UID: { sh: "id -u" }
+  GID: { sh: "id -g" }
+
+tasks:
+  conf:
+    cmds:
+      - cmake -B build
+      - cmake --build build -j
+    sources:
+      - ./CMakeLists.txt
+      - ./src/CMakeLists.txt
+    generates:
+      - ./build
+
+  build:
+    deps: [conf]
+    cmds:
+      - cmake --build build -j
+    sources:
+      - ./CMakeLists.txt
+      - ./src/CMakeLists.txt
+
+  clean:
+    cmds:
+      - rm -rf build
+
+  infer:
+    deps: [build]
+    dir: build
+    cmds:
+      - programs/inference
+
+  train:
+    deps: [build]
+    dir: build
+    cmds:
+      - programs/train
+
+  bmc:
+    deps: [build]
+    dir: build
+    cmds:
+      - ./tests/test_train_mk
+
+  bmpy:
+    deps: [build]
+    cmds:
+      - uv run python scripts/mk_bench.py --lib build/tests/libmk_entrypoint.so --weights models/gpt2-124M-weights.bin
+
+  hermetic:infer:
+    cmds:
+      - docker build -t gpt2cu:pure --target=pure .
+      - docker run --rm --gpus all gpt2cu:pure
+
+  dbuild:
+    cmds:
+      - docker build -t gpt2cu:dev --target=dev .
+
+  drun:
+    cmds:
+      - |
+        docker run --rm -it --gpus all \
+          -e USER_UID={{.UID}} \
+          -e USER_GID={{.GID}} \
+          -e TERM \
+          --mount=type=volume,src=gpt2cu-nix,dst=/nix \
+          --mount=type=bind,src=$PWD,dst=/workspace \
+          gpt2cu:dev
+
