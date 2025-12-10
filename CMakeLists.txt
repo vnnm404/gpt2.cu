@@ -10,8 +10,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type (Debug or Release)" FORCE)
 endif()
-
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+
+if (DEFINED ENV{CUDA_ARCH})
+    set(CMAKE_CUDA_ARCHITECTURES $ENV{CUDA_ARCH})
+    message(STATUS "Setting CUDA arch: ${CMAKE_CUDA_ARCHITECTURES}")
+endif()
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Compiler flags configuration
 # Note: We use target properties to avoid generator expression issues
