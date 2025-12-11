@@ -7,6 +7,10 @@ vars:
   GID: { sh: "id -g" }
 env:
   DATA_ROOT: "{{.ROOT_DIR}}"
+  CUDA_ARCH:
+    sh: |
+      which nvidia-smi 2>&1>/dev/null || exit 0
+      nvidia-smi --query-gpu=compute_cap --format=csv,noheader | sed "s/\.//"
 
 tasks:
   build:
@@ -35,6 +39,7 @@ tasks:
 
   test:train:
     deps: [build]
+    dir: build
     cmds:
       - ./tests/test_train
 

@@ -1,5 +1,6 @@
 /* GPT-2 training test - validates forward pass, backward pass, and optimizer updates */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>

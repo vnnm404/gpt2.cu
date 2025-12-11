@@ -287,7 +287,6 @@ def run_profile(
     profile_cmd = [
         nsys,
         "profile",
-        "--force-overwrite=true",
         "--stats=true",
         "--export",
         export_arg,
@@ -318,9 +317,7 @@ def main() -> None:
         description="Profile with nsys.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument(
-        "--nsys-bin", default="nsys", help="path to nsys binary"
-    )
+    parser.add_argument("--nsys-bin", default="nsys", help="path to nsys binary")
     parser.add_argument("--trace", default="cuda,nvtx,osrt", help="comma-separated trace options")
     parser.add_argument(
         "--export",
