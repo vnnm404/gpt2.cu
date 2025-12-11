@@ -185,6 +185,15 @@ EOF
             program = "${mypkgs.inference.run}/bin/inference";
           };
         };
+
+        devShells.profiling = pkgs.mkShell {
+          inputsFrom = [ self.devShells.x86_64-linux.default ];
+
+          packages = [
+              cudaPackages.nsight_systems # nix-du: ~1.1 / manual diffing: ~2.3GiB / nix-tree: NAR Size: 8.11 KiB | Closure Size: 15.39 MiB | Added Size: 93.75 KiB
+              cudaPackages.nsight_compute # nix-du: ~1.3 / manual diffing: 2.5GiB / NAR Size: 4.93 KiB | Closure Size: 15.24 MiB | Added Size: 16.35 KiB
+          ];
+        };
       }
     );
 }
