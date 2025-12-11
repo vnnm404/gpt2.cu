@@ -181,7 +181,7 @@ def compute_visual_layout(
     return df
 
 
-def plot_timer_data_altair(
+def plot_timer(
     df: pl.DataFrame,
     title: str,
     max_instr_legend: int = 20,
@@ -271,7 +271,7 @@ def main(argv=None) -> int:
 
     df_vis = compute_visual_layout(df)
 
-    chart = plot_timer_data_altair(
+    chart = plot_timer(
         df_vis,
         title=f"Instruction execution timeline per SM (Step {args.step})",
     )

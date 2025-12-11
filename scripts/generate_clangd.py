@@ -46,7 +46,7 @@ def find_cuda_include_path() -> Path | None:
         Path("/opt/cuda/include"),
     ]
     cuda_home = os.environ.get("CUDA_HOME")
-    if cuda_home and (cuda_home_p:=Path(cuda_home)).exists():
+    if cuda_home and (cuda_home_p := Path(cuda_home)).exists():
         candidates.insert(0, cuda_home_p)
     for cand in candidates:
         if cand.is_dir():
@@ -71,7 +71,7 @@ def emit_clangd(
     cuda_include_line += f"\n    - --cuda-path={cuda_include}" if cuda_include else ""
     cuda_section = ""
     if cuda_include:
-        cuda_section = """
+        cuda_section += """
 
 ---
 
@@ -80,10 +80,9 @@ If:
 CompileFlags:
   Add:
     - -xcuda
-    - --no-cuda-version-check
-"""
-        if cuda_arch:
-            cuda_section += f"\n{' ' * 4}- --cuda-gpu-arch={cuda_arch}"
+    - --no-cuda-version-check"""
+    if cuda_arch:
+        cuda_section += f"\n{' ' * 4}- --cuda-gpu-arch={cuda_arch}"
 
     include_lines = f"\n{' ' * 4}- -I".join(map(str, [""] + include_paths))
     content = f"""CompileFlags:
@@ -120,7 +119,12 @@ def main() -> None:
     else:
         print("CUDA include path not found, proceeding without CUDA flags", file=sys.stderr)
 
-    emit_clangd(root / ".clangd", include_paths=cpp_paths + project_includes, cuda_include=cuda_path)
+    emit_clangd(
+        root / ".clangd",
+        include_paths=cpp_paths + project_includes,
+        cuda_include=cuda_path,
+        cuda_arch=os.environ.get("CUDA_ARCH"),
+    )
     print("Generated .clangd")
     print("Make sure you have build/compile_commands.json")
 
