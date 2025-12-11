@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import functools
+import os
 import subprocess
 import sys
 from pathlib import Path
-import functools
 
 run = functools.partial(
     subprocess.run,
@@ -44,6 +45,9 @@ def find_cuda_include_path() -> Path | None:
         Path("/usr/local/cuda/include"),
         Path("/opt/cuda/include"),
     ]
+    cuda_home = os.environ.get("CUDA_HOME")
+    if cuda_home and (cuda_home_p:=Path(cuda_home)).exists():
+        candidates.insert(0, cuda_home_p)
     for cand in candidates:
         if cand.is_dir():
             return cand
@@ -64,6 +68,7 @@ def emit_clangd(
     cuda_arch: str | None = None,
 ) -> None:
     cuda_include_line = f"    - -I{cuda_include}" if cuda_include else ""
+    cuda_include_line += f"\n    - --cuda-path={cuda_include}" if cuda_include else ""
     cuda_section = ""
     if cuda_include:
         cuda_section = """
@@ -78,22 +83,26 @@ CompileFlags:
     - --no-cuda-version-check
 """
         if cuda_arch:
-            cuda_section += f"\n{' '*4}- --cuda-gpu-arch={cuda_arch}"
+            cuda_section += f"\n{' ' * 4}- --cuda-gpu-arch={cuda_arch}"
 
-    include_lines = f"\n{' '*4}- -I".join(map(str, [""] + include_paths))
+    include_lines = f"\n{' ' * 4}- -I".join(map(str, [""] + include_paths))
     content = f"""CompileFlags:
   CompilationDatabase: build
   Add:{include_lines}
 {cuda_include_line}
   Remove:
     - -forward-unknown-to-host-compiler
-    - --generate-code*{cuda_section}
+    - --generate-code*
+    - -Xcompiler=*
+    - --options-file
+    - --use_fast_math
+    - -rdc=true
+    - -G{cuda_section}
 
-Diagnostics:
-  UnusedIncludes: None
-  MissingIncludes: None
 """
     dest.write_text(content)
+    print("cuda include:", cuda_include)
+    print("cuda section:", cuda_section)
 
 
 def main() -> None:
@@ -111,7 +120,7 @@ def main() -> None:
     else:
         print("CUDA include path not found, proceeding without CUDA flags", file=sys.stderr)
 
-    emit_clangd(root / ".clangd", cpp_paths + project_includes, cuda_path)
+    emit_clangd(root / ".clangd", include_paths=cpp_paths + project_includes, cuda_include=cuda_path)
     print("Generated .clangd")
     print("Make sure you have build/compile_commands.json")
 
