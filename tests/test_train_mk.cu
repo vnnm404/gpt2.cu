@@ -470,7 +470,7 @@ extern "C" int mk_launch(
     return static_cast<int>(cudaDeviceSynchronize());
 }
 
-extern "C" int mk_setup(const char *weights_path, int seq_len) {
+extern "C" int mk_setup(int seq_len) {
     if (mk_prepared) {
         return 0;
     }
@@ -492,14 +492,28 @@ extern "C" int mk_setup(const char *weights_path, int seq_len) {
         return -1;
     }
 
-    const char *path = weights_path && weights_path[0] ? weights_path : "../models/gpt2-124M-weights.bin";
-    FILE *file = fopen(path, "rb");
+    const char *data_root = getenv("DATA_ROOT");
+    if (!data_root) data_root = "..";
+    char weights_path[512];
+    if (join_path(weights_path, sizeof(weights_path), data_root, "models/gpt2-124M-weights.bin") != 0) {
+        fprintf(stderr, "mk_setup: failed to construct weights path\n");
+        gpt2_free(&model);
+        gpt2_free(&g_model);
+        return -1;
+    }
+    printf("mk_setup: loading weights from %s.\n", weights_path);
+
+    FILE *file = fopen(weights_path, "rb");
     if (file == NULL) {
-        fprintf(stderr, "mk_setup: failed to open weights at %s\n", path);
+        fprintf(stderr, "mk_setup: failed to open weights at %s\n", weights_path);
+        gpt2_free(&model);
+        gpt2_free(&g_model);
         return -1;
     }
     if (gpt2_load_weights(&model, file) != 0) {
         fprintf(stderr, "mk_setup: failed to load weights\n");
+        gpt2_free(&model);
+        gpt2_free(&g_model);
         fclose(file);
         return -1;
     }
@@ -639,28 +653,48 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // Load model weights
-    FILE *model_file = fopen("../models/gpt2-124M-weights.bin", "rb");
-    if (model_file == NULL) {
-        fprintf(stderr, "Error opening model file\n");
+    // Load weights
+    const char *root = getenv("DATA_ROOT");
+    if (!root) root = "..";
+    char weights_path[512];
+    if(join_path(weights_path, sizeof(weights_path), root, "models/gpt2-124M-weights.bin") != 0) {
+        fprintf(stderr, "Failed to build data root path\n");
         gpt2_free(&model);
         gpt2_free(&g_model);
-        return 1;
+        return -1;
     }
-    
-    if (gpt2_load_weights(&model, model_file) != 0) {
-        fprintf(stderr, "Failed to load GPT-2 weights\n");
-        fclose(model_file);
+
+    printf("Loading weights from %s.\n", weights_path);
+    FILE *weights_file = fopen(weights_path, "rb");
+    if (weights_file == NULL) {
+        fprintf(stderr, "Failed to open weights file '%s': %s\n", weights_path, strerror(errno));
         gpt2_free(&model);
         gpt2_free(&g_model);
-        return 1;
+        return -1;
     }
-    fclose(model_file);
-    
-    printf("Model loaded successfully.\n");
+
+    if (gpt2_load_weights(&model, weights_file) != 0) {
+        fprintf(stderr, "Failed to load GPT-2 weights from %s\n", weights_path);
+
+        gpt2_free(&model);
+        gpt2_free(&g_model);
+        fclose(weights_file);
+        return -1;
+    }
+    fclose(weights_file);
+    printf("Model loaded from %s.\n", weights_path);
     
     // Load debug state file
-    FILE *state_file = fopen("../models/gpt2_124M_debug_state.bin", "rb");
+    char state_path[512];
+    if(join_path(state_path, sizeof(state_path), root, "models/gpt2_124M_debug_state.bin") != 0) {
+        fprintf(stderr, "Failed to build path to debug state file\n");
+        gpt2_free(&model);
+        gpt2_free(&g_model);
+        return -1;
+    }
+    printf("Loading debug state from %s.\n", state_path);
+
+    FILE *state_file = fopen(state_path, "rb");
     if (state_file == NULL) {
         fprintf(stderr, "Error opening state file\n");
         gpt2_free(&model);

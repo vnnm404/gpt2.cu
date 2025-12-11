@@ -5,6 +5,8 @@ version: "3"
 vars:
   UID: { sh: "id -u" }
   GID: { sh: "id -g" }
+env:
+  DATA_ROOT: "{{.ROOT_DIR}}"
 
 tasks:
   conf:
@@ -50,7 +52,7 @@ tasks:
   bmpy:
     deps: [build]
     cmds:
-      - uv run python scripts/mk_bench.py --lib build/tests/libmk_entrypoint.so --weights models/gpt2-124M-weights.bin
+      - uv run python benchmark/mk_bench.py --lib build/tests/libmk_entrypoint.so
 
   hermetic:infer:
     cmds:
@@ -68,6 +70,8 @@ tasks:
           -e USER_UID={{.UID}} \
           -e USER_GID={{.GID}} \
           -e TERM \
+          -e DATA_ROOT=/workspace/data \
+          -w /workspace \
           --mount=type=volume,src=gpt2cu-nix,dst=/nix \
           --mount=type=bind,src=$PWD,dst=/workspace \
           gpt2cu:dev

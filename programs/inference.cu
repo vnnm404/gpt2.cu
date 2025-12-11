@@ -46,22 +46,6 @@ int setup_inference_buffers(inference_buffers_t *buffers);
 void forward(const int *d_input_tokens, int seq_len);
 int extract_greedy_token(int seq_len, tensor_t *logits);
 
-int join_path(char *out, size_t outsz, const char *root, const char *rel) {
-  if (!out || outsz == 0 || !root || !rel) {
-    return -1;
-  }
-
-  size_t len = strlen(root);
-  const char *sep = (len > 0 && root[len - 1] == '/') ? "" : "/";
-
-  int n = snprintf(out, outsz, "%s%s%s", root, sep, rel);
-
-  if (n < 0 || (size_t)n >= outsz) {
-    return -1;
-  }
-
-  return 0;
-}
 
 int main() {
     printf("GPT-2 inference\n");

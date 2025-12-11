@@ -138,7 +138,16 @@ int main(int argc, char *argv[]) {
     }
     
     // Load model weights
-    FILE *model_file = fopen("../models/gpt2-124M-weights.bin", "rb");
+    const char *root = getenv("DATA_ROOT");
+    if (!root) root = "..";
+    char model_path[512];
+    if(join_path(model_path, sizeof(model_path), root, "models/gpt2-124M-weights.bin") != 0) {
+        fprintf(stderr, "Failed to construct model weights path\n");
+        gpt2_free(&model);
+        gpt2_free(&g_model);
+        return 1;
+    }
+    FILE *model_file = fopen(model_path, "rb");
     if (model_file == NULL) {
         fprintf(stderr, "Error opening model file\n");
         gpt2_free(&model);
@@ -154,11 +163,18 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     fclose(model_file);
-    
-    printf("Model loaded successfully.\n");
-    
+
+    printf("Model loaded from %s.\n", model_path);
+
     // Load debug state file
-    FILE *state_file = fopen("../models/gpt2_124M_debug_state.bin", "rb");
+    char state_path[512];
+    if (join_path(state_path, sizeof(state_path), root, "models/gpt2_124M_debug_state.bin") != 0) {
+        fprintf(stderr, "Failed to construct state file path\n");
+        gpt2_free(&model);
+        gpt2_free(&g_model);
+        return 1;
+    }
+    FILE *state_file = fopen(state_path, "rb");
     if (state_file == NULL) {
         fprintf(stderr, "Error opening state file\n");
         gpt2_free(&model);
