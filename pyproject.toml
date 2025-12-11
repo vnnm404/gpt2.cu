@@ -17,8 +17,14 @@ dependencies = [
 [dependency-groups]
 benchmark = [
     "pint>=0.25.2",
+    "pygit2>=1.19.0",
+    "plotly>=6.5.0",
+    "altair>=6.0.0",
+    "polars>=1.36.1",
+    "pyarrow>=22.0.0",
 ]
 dev = [
+    "ipython>=9.8.0",
     "mypy>=1.19.0",
     "pyright>=1.1.407",
     "ruff>=0.14.8",

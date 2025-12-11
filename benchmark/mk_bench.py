@@ -210,7 +210,6 @@ class BenchmarkConfig:
     stream: int
     seq_len: int
     sync_after: bool
-    weights: Path
 
 
 def run_benchmark(cfg: BenchmarkConfig) -> None:
@@ -286,7 +285,7 @@ def run_benchmark(cfg: BenchmarkConfig) -> None:
     ]
     entry.restype = ctypes.c_int
 
-    prepare.argtypes = [ctypes.c_char_p, ctypes.c_int]
+    prepare.argtypes = [ctypes.c_int]
     prepare.restype = ctypes.c_int
     get_handles.argtypes = [ctypes.POINTER(MkHandles)]
     get_handles.restype = None
@@ -297,7 +296,7 @@ def run_benchmark(cfg: BenchmarkConfig) -> None:
     print(f"Loaded {cfg.entrypoint} from {cfg.library}")
 
     try:
-        status = prepare(ctypes.c_char_p(str(cfg.weights).encode()), ctypes.c_int(cfg.seq_len))
+        status = prepare(ctypes.c_int(cfg.seq_len))
         runtime.check(status, "mk_setup")
 
         handles = MkHandles()
@@ -381,12 +380,6 @@ def parse_args() -> BenchmarkConfig:
         "--seq-len", type=int, default=MK_SEQ_LEN, help="Sequence length argument (must match compiled layout)"
     )
     parser.add_argument("--no-sync-after", action="store_true", help="Do not synchronize after launch")
-    parser.add_argument(
-        "--weights",
-        type=Path,
-        default=Path("../models/gpt2-124M-weights.bin").resolve(),
-        help="Path to weights bin",
-    )
     args = parser.parse_args()
 
     return BenchmarkConfig(
@@ -402,7 +395,6 @@ def parse_args() -> BenchmarkConfig:
         stream=args.stream,
         seq_len=args.seq_len,
         sync_after=not args.no_sync_after,
-        weights=args.weights,
     )
 
 
