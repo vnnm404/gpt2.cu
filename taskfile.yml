@@ -9,23 +9,13 @@ env:
   DATA_ROOT: "{{.ROOT_DIR}}"
 
 tasks:
-  conf:
+  build:
     cmds:
       - cmake -B build
-      - cmake --build build -j
+      - cmake --build build -j8
     sources:
-      - ./CMakeLists.txt
-      - ./src/CMakeLists.txt
-    generates:
-      - ./build
-
-  build:
-    deps: [conf]
-    cmds:
-      - cmake --build build -j
-    sources:
-      - ./CMakeLists.txt
-      - ./src/CMakeLists.txt
+      - ./**/CMakeLists.txt
+      - ./**/*.{cu,cuh,c,cpp,h,hpp}
 
   clean:
     cmds:
@@ -35,19 +25,46 @@ tasks:
     deps: [build]
     dir: build
     cmds:
-      - programs/inference
+      - ./programs/inference
 
   train:
     deps: [build]
     dir: build
     cmds:
-      - programs/train
+      - ./programs/train
 
-  bmc:
+  test:train:
+    deps: [build]
+    cmds:
+      - ./tests/test_train
+
+  test:train_mk:
     deps: [build]
     dir: build
     cmds:
       - ./tests/test_train_mk
+
+  # Programs
+  profile:inference:
+    deps: [build]
+    cmds:
+      - uv run benchmark/run_nsys.py --app ./build/programs/inference {{.CLI_ARGS}}
+
+  profile:train:
+    deps: [build]
+    cmds:
+      - uv run benchmark/run_nsys.py --app ./build/programs/train {{.CLI_ARGS}}
+
+  # Tests
+  profile:test_train:
+    deps: [build]
+    cmds:
+      - uv run benchmark/run_nsys.py --app ./build/tests/test_train {{.CLI_ARGS}}
+
+  profile:test_train_mk:
+    deps: [build]
+    cmds:
+      - uv run benchmark/run_nsys.py --app ./build/tests/test_train_mk {{.CLI_ARGS}}
 
   bmpy:
     deps: [build]
