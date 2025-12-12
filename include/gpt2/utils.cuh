@@ -14,4 +14,6 @@ static inline void gpuErrchk_internal(cudaError_t code, const char *file,
   }
 }
 #define gpuErrchk(ans)                                                         \
-  { gpuErrchk_internal((ans), __FILE__, __LINE__); }
+  {                                                                            \
+    gpuErrchk_internal((ans), __FILE__, __LINE__);                             \
+  }
