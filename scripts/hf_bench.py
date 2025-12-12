@@ -23,6 +23,11 @@ def main():
         raise RuntimeError("CUDA is required for this benchmark.")
 
     device = torch.device("cuda")
+    
+    # Force full float32 precision - no downcasts allowed
+    torch.set_default_dtype(torch.float32)
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
     torch.backends.cudnn.benchmark = True
 
     # Prepare input: randomly generated tokens
@@ -32,6 +37,7 @@ def main():
     # Load GPT-2 with LM head for training
     print("Loading GPT-2 with LM head...")
     model = GPT2LMHeadModel.from_pretrained("gpt2").to(device)
+    model.float()  # Ensure full float32 precision
     model.train()
 
     # Optimizer
