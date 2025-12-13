@@ -265,9 +265,10 @@ int main(int argc, char *argv[]) {
         zero_activation_grads(config, &g_buffers);
         gpuErrchk(cudaMemset(bar, 0, bar_size * sizeof(int)));
         
-        // forward(d_input_tokens, T);
-        // cross_entropy(d_target_tokens, T);
-        // backward(d_input_tokens, d_target_tokens, T);
+        // forward(config, model, buffers, d_input_tokens, T);
+        // cross_entropy(config, buffers, d_target_tokens, T);
+        // backward(config, model, buffers, g_model, g_buffers, d_input_tokens, d_target_tokens, T);
+
 
         megakernel<<<NUM_SM, threads_per_block, shared_mem_size>>>(
             model.params_memory,
