@@ -175,7 +175,9 @@ __device__ void mlp_backward_weight_device(float *g_weight, float *g_bias, const
     }
     
     // Compute bias gradient - use first row of threads
-    if (ty == 0 && out_col < output_dim && g_bias != NULL) {
+    // if (ty == 0 && out_col < output_dim && g_bias != NULL) {
+    // Compute bias gradient - only in first row of blocks
+    if (ty == 0 && blockIdx_y == 0 && out_col < output_dim && g_bias != NULL) {
         float bias_grad = 0.0f;
         for (int bs = 0; bs < batch_seq; bs++) {
             bias_grad += g_out[bs * output_dim + out_col];
@@ -241,7 +243,9 @@ __global__ void mlp_backward_weight(float *g_weight, float *g_bias, const float 
     }
     
     // Compute bias gradient - use first row of threads
-    if (ty == 0 && out_col < output_dim && g_bias != NULL) {
+    // if (ty == 0 && out_col < output_dim && g_bias != NULL) {
+    // Compute bias gradient - only in first row of blocks  
+    if (ty == 0 && blockIdx.y == 0 && out_col < output_dim && g_bias != NULL) {
         float bias_grad = 0.0f;
         for (int bs = 0; bs < batch_seq; bs++) {
             bias_grad += g_out[bs * output_dim + out_col];
