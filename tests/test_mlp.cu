@@ -198,11 +198,14 @@ void test_mlp_backward_weight_basic() {
     cudaMemset(d_g_bias, 0, N * sizeof(float));
     
     // Launch kernel
-    dim3 grid((N + TILE_SIZE - 1) / TILE_SIZE, (K + TILE_SIZE - 1) / TILE_SIZE);
-    dim3 block(TILE_SIZE * TILE_SIZE);
-    
-    mlp_backward_weight<<<grid, block>>>(d_g_weight, d_g_bias, d_g_out, d_input, B, S, K, N);
-    
+    constexpr int MLP_TILE = 32;
+    dim3 grid((N + MLP_TILE - 1) / MLP_TILE, (K + MLP_TILE - 1) / MLP_TILE);
+    constexpr int THREADS_PER_BLOCK = (MLP_TILE / 2) * (MLP_TILE / 2);
+    dim3 block(THREADS_PER_BLOCK);
+    size_t smem = 4 * MLP_TILE * MLP_TILE * sizeof(float);
+
+    mlp_backward_weight<MLP_TILE><<<grid, block, smem>>>(d_g_weight, d_g_bias, d_g_out, d_input, B, S, K, N);
+
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         printf("Kernel launch error: %s\n", cudaGetErrorString(err));
@@ -301,10 +304,13 @@ void test_mlp_backward_input_basic() {
     cudaMemset(d_g_input, 0, M * K * sizeof(float));
     
     // Launch kernel
-    dim3 grid((K + TILE_SIZE - 1) / TILE_SIZE, (M + TILE_SIZE - 1) / TILE_SIZE);
-    dim3 block(TILE_SIZE * TILE_SIZE);
-    
-    mlp_backward_input<<<grid, block>>>(d_g_input, d_g_out, d_weight, B, S, K, N);
+    constexpr int MLP_TILE = 32;
+    dim3 grid((K + MLP_TILE - 1) / MLP_TILE, (M + MLP_TILE - 1) / MLP_TILE);
+    constexpr int THREADS_PER_BLOCK = (MLP_TILE / 2) * (MLP_TILE / 2);
+    dim3 block(THREADS_PER_BLOCK);
+    size_t smem = 4 * MLP_TILE * MLP_TILE * sizeof(float);
+
+    mlp_backward_input<MLP_TILE><<<grid, block, smem>>>(d_g_input, d_g_out, d_weight, B, S, K, N);
     
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
@@ -374,11 +380,14 @@ void test_mlp_backward_gpt2_small() {
     cudaMemset(d_g_input, 0, M * K * sizeof(float));
     
     // Launch backward input kernel
-    dim3 grid_input((K + TILE_SIZE - 1) / TILE_SIZE, (M + TILE_SIZE - 1) / TILE_SIZE);
-    dim3 block(TILE_SIZE * TILE_SIZE);
-    
-    mlp_backward_input<<<grid_input, block>>>(d_g_input, d_g_out, d_weight, B, S, K, N);
-    
+    constexpr int MLP_TILE = 32;
+    dim3 grid_input((K + MLP_TILE - 1) / MLP_TILE, (M + MLP_TILE - 1) / MLP_TILE);
+    constexpr int THREADS_PER_BLOCK = (MLP_TILE / 2) * (MLP_TILE / 2);
+    dim3 block(THREADS_PER_BLOCK);
+    size_t smem = 4 * MLP_TILE * MLP_TILE * sizeof(float);
+
+    mlp_backward_input<MLP_TILE><<<grid_input, block, smem>>>(d_g_input, d_g_out, d_weight, B, S, K, N);
+   
     cudaError_t err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         printf("Backward input kernel error: %s\n", cudaGetErrorString(err));
