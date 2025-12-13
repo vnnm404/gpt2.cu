@@ -16,7 +16,3 @@ set_target_properties(gpt2 PROPERTIES CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECT
 # separable compilation so device kernels defined in the static lib are available to cuda
 # kernel launches from executables that link against gpt2
 set_target_properties(gpt2 PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-
-if (MLP_WMMA)
-  target_compile_definitions(gpt2 PUBLIC MLP_WMMA)
-endif()

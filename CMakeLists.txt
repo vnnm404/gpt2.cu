@@ -48,8 +48,6 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
   set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 -DNDEBUG --use_fast_math")
 endif()
 
-option(MLP_WMMA "Enable WMMA kernels" OFF)
-
 # Include directories
 include_directories(${CMAKE_SOURCE_DIR}/include)
 include_directories(${CMAKE_SOURCE_DIR}/third_party)

@@ -27,38 +27,19 @@ static void bench_mlp_forward(nvbench::state &state) {
                                            static_cast<std::size_t>(N) * sizeof(float));
     state.add_global_memory_writes<uint8_t>(static_cast<std::size_t>(M) * N * sizeof(float));
 
-#ifdef MLP_WMMA
-    // warp-tiled kernel config
-    // constexpr int MLP_TILE = 16;
+    // warp-tiled + double buffered kernel config
     constexpr int MLP_TILE = 32;
-    
+
     // each block covers MLP_TILE x MLP_TILE output elements
     dim3 grid((N + MLP_TILE - 1) / MLP_TILE, (M + MLP_TILE - 1) / MLP_TILE);
-    
+
     // 2x2 microtiling. for MLP_TILE=16: 8*8 = 64 threads
     constexpr int THREADS_PER_BLOCK = (MLP_TILE / 2) * (MLP_TILE / 2);
     dim3 block(THREADS_PER_BLOCK);
-#ifdef MLP_DOUBLE_BUFFER
+
     // two double-buffered MLP_TILE x MLP_TILE tiles (input + weight)
     // 4x space for double buffering
     size_t smem = 4 * MLP_TILE * MLP_TILE * sizeof(float);
-#else
-    // two MLP_TILE x MLP_TILE tiles (input + weight)
-    size_t smem = 2 * MLP_TILE * MLP_TILE * sizeof(float);
-#endif
-#else
-    // og kernel config
-    constexpr int MLP_TILE = TILE_SIZE;
-    
-    // each block covers TILE_SIZE x TILE_SIZE output elements
-    dim3 grid((N + TILE_SIZE - 1) / TILE_SIZE, (M + TILE_SIZE - 1) / TILE_SIZE);
-    
-    // one thread per output element
-    dim3 block(TILE_SIZE * TILE_SIZE);
-    
-    // two TILE_SIZE x TILE_SIZE tiles
-    size_t smem = 2 * TILE_SIZE * TILE_SIZE * sizeof(float);
-#endif
 
     state.exec([&](nvbench::launch &launch)
               //  { mlp_forward<TILE_SIZE><<<grid, block, smem, launch.get_stream()>>>(
