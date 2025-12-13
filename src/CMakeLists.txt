@@ -12,3 +12,11 @@ target_include_directories(gpt2 PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(gpt2 PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Wno-deprecated-gpu-targets>)
 set_target_properties(gpt2 PROPERTIES LINKER_LANGUAGE CXX)
 set_target_properties(gpt2 PROPERTIES CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
+
+# separable compilation so device kernels defined in the static lib are available to cuda
+# kernel launches from executables that link against gpt2
+set_target_properties(gpt2 PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+
+if (MLP_WMMA)
+  target_compile_definitions(gpt2 PUBLIC MLP_WMMA)
+endif()

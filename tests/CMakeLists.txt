@@ -38,3 +38,39 @@ set_target_properties(mk_entrypoint PROPERTIES
 )
 target_include_directories(mk_entrypoint PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
 target_link_libraries(mk_entrypoint gpt2 unity)
+
+
+# nvbench ----------------------------------------------------------------------
+include(FetchContent)
+
+option(GPT2_ENABLE_NVBENCH "Build NVBench benchmarks" ON)
+
+if (GPT2_ENABLE_NVBENCH)
+  FetchContent_Declare(
+    nvbench
+    GIT_REPOSITORY https://github.com/NVIDIA/nvbench.git
+    # TODO: pin
+    GIT_TAG main
+  )
+  FetchContent_MakeAvailable(nvbench)
+endif()
+
+if (GPT2_ENABLE_NVBENCH)
+  file(GLOB BENCH_SOURCES "bench_*.cu")
+
+  foreach(BENCH_SOURCE ${BENCH_SOURCES})
+    get_filename_component(BENCH_NAME ${BENCH_SOURCE} NAME_WE)
+    set_source_files_properties(${BENCH_SOURCE} PROPERTIES LANGUAGE CUDA)
+
+    add_executable(${BENCH_NAME} ${BENCH_SOURCE})
+
+    target_include_directories(${BENCH_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
+    target_link_libraries(${BENCH_NAME} gpt2 nvbench::main)
+
+    set_target_properties(${BENCH_NAME} PROPERTIES
+      CUDA_SEPARABLE_COMPILATION ON
+      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+    )
+  endforeach()
+endif()
+
