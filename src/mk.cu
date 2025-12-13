@@ -20,6 +20,7 @@
 
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
 #define NUM_SM 28
+#define NUM_PARAMS 124439808
 
 // ============================================================================
 // Compile-time constants for megakernel pointer arithmetic
@@ -766,6 +767,19 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
         prev_op = op;
     }
 
+    // OP 35: Adamw kernel - [CEIL_DIV(total_params, thr) blocks, 1D grid]
+    {
+        int op = 35;
+        // int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1) * 14) + 14;
+        int bar_idx = bar_idx_counter++;
+        int total_params = NUM_PARAMS;
+        int expected = CEIL_DIV(B * S, thr);
+        int num_blocks = CEIL_DIV(total_params, thr);
+
+        add_instructions_1d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks);
+        prev_op = op;
+    }
+
     // Populate inc flags
     for (int i = 0; i < instruction_count; i++)
     {
@@ -785,7 +799,7 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
                 int run_end = i - 1;
                 int run_len = run_end - run_start + 1;
 
-                if (run_op >= 0 && run_op != 34)
+                if (run_op >= 0 && run_op != 35)
                 {
                     int to_mark = (run_len < NUM_SM) ? run_len : NUM_SM;
                     int start_idx = run_end - to_mark + 1;
@@ -927,6 +941,10 @@ __global__ void megakernel(
     long long *instr_end_time,
 #endif
 
+    float *m_memory,
+    float *v_memory,
+    int t,
+
     int *bar,
     stream_t **streams)
 {
@@ -947,6 +965,8 @@ __global__ void megakernel(
 #ifdef PROFILE
         bar_enter_time, bar_exit_time, instr_end_time,
 #endif
+        m_memory, v_memory,
+        t,
         bar, stream);
 
 #ifdef PROFILE
@@ -975,6 +995,10 @@ __device__ void execute_stream(
     long long *instr_end_time,
 #endif
 
+    float *m_memory,
+    float *v_memory,
+    int t,
+
     int *bar,
     stream_t *stream)
 {
@@ -986,6 +1010,8 @@ __device__ void execute_stream(
 #ifdef PROFILE
                             bar_enter_time, bar_exit_time, instr_end_time,
 #endif
+                            m_memory, v_memory,
+                            t,
                             bar, instr);
     }
 }
@@ -1006,6 +1032,10 @@ __device__ void execute_instruction(
     long long *bar_exit_time,
     long long *instr_end_time,
 #endif
+
+    float *m_memory,
+    float *v_memory,
+    int t,
 
     int *bar,
     instruction_t instr)
@@ -1507,6 +1537,21 @@ __device__ void execute_instruction(
             embedding_backward_device(MK_WTE(grads), MK_WPE(grads), MK_ACT_ENCODED(grad_acts), d_input_tokens, B, S, h, b_x);
         }
         break;
+    }
+
+    case 35:
+    {
+        // OP 35: Adamw update
+        for (int b_x = start_b_x; b_x <= end_b_x; b_x++)
+        {
+            // opt_state.learning_rate = 1e-4f;
+            // opt_state.beta1 = 0.9f;
+            // opt_state.beta2 = 0.999f;
+            // opt_state.eps = 1e-8f;
+            // opt_state.weight_decay = 0.01f;
+            // opt_state.t = 0;
+            adamw_kernel_device(params, grads, m_memory, v_memory, NUM_PARAMS, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.01f, t, b_x);
+        }
     }
     }
 
