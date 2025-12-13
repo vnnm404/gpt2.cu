@@ -59,7 +59,8 @@ void test_mlp_forward_basic(void) {
 
 #ifdef MLP_WMMA
     // warp-tiled kernel config
-    constexpr int MLP_TILE = 16;
+    // constexpr int MLP_TILE = 16;
+    constexpr int MLP_TILE = 32;
     
     // each block covers MLP_TILE x MLP_TILE output elements
     dim3 grid((N + MLP_TILE - 1) / MLP_TILE, (M + MLP_TILE - 1) / MLP_TILE);
@@ -68,8 +69,14 @@ void test_mlp_forward_basic(void) {
     constexpr int THREADS_PER_BLOCK = (MLP_TILE / 2) * (MLP_TILE / 2);
     dim3 block(THREADS_PER_BLOCK);
     
+#ifdef MLP_DOUBLE_BUFFER
+    // two double-buffered MLP_TILE x MLP_TILE tiles (input + weight)
+    // 4x space for double buffering
+    size_t smem = 4 * MLP_TILE * MLP_TILE * sizeof(float);
+#else
     // two MLP_TILE x MLP_TILE tiles (input + weight)
     size_t smem = 2 * MLP_TILE * MLP_TILE * sizeof(float);
+#endif
 #else
     // og kernel config
     constexpr int MLP_TILE = TILE_SIZE;  // 32
