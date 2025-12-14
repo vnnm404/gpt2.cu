@@ -36,17 +36,16 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort =
 // Configuration matching the test expectations
 config_t config = {
     .vocab_size = 50257,
-    .batch_size = 4,  // B = 4 from test
+    .batch_size = 4, // B = 4 from test
     .n_layer = 12,
     .n_head = 12,
     .n_embd = 768,
     .n_positions = 1024,
-    .n_ctx = 1024
-};
+    .n_ctx = 1024};
 
 // Model structures
 gpt2_t model;
-gpt2_t g_model;  // model weight gradients
+gpt2_t g_model; // model weight gradients
 
 // Training buffer structures (same as train.cu)
 typedef struct
@@ -85,7 +84,8 @@ train_buffers_t buffers;
 train_buffers_t g_buffers;
 
 // AdamW optimizer state
-typedef struct {
+typedef struct
+{
     float *m_memory;
     float *v_memory;
     float learning_rate;
@@ -109,44 +109,51 @@ static void gpt2_zero_grad(gpt2_t *grads);
 static void zero_activation_grads(train_buffers_t *g_buffers);
 
 // Helper: compute mean loss
-static float compute_mean_loss(tensor_t *losses, int B, int S) {
+static float compute_mean_loss(tensor_t *losses, int B, int S)
+{
     float *cpu_losses = (float *)malloc(B * S * sizeof(float));
     cudaMemcpy(cpu_losses, losses->data, B * S * sizeof(float), cudaMemcpyDeviceToHost);
-    
+
     float sum = 0.0f;
-    for (int i = 0; i < B * S; i++) {
+    for (int i = 0; i < B * S; i++)
+    {
         sum += cpu_losses[i];
     }
-    
+
     free(cpu_losses);
     return sum / (B * S);
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
     printf("GPT-2 Training Test\n");
-    
+
     // Initialize models
-    if (gpt2_initialize(&model, &config) != 0) {
+    if (gpt2_initialize(&model, &config) != 0)
+    {
         fprintf(stderr, "Failed to initialize GPT-2 model\n");
         return 1;
     }
-    
-    if (gpt2_initialize(&g_model, &config) != 0) {
+
+    if (gpt2_initialize(&g_model, &config) != 0)
+    {
         fprintf(stderr, "Failed to initialize GPT-2 gradient model\n");
         gpt2_free(&model);
         return 1;
     }
-    
+
     // Load model weights
     FILE *model_file = fopen("../models/gpt2-124M-weights.bin", "rb");
-    if (model_file == NULL) {
+    if (model_file == NULL)
+    {
         fprintf(stderr, "Error opening model file\n");
         gpt2_free(&model);
         gpt2_free(&g_model);
         return 1;
     }
-    
-    if (gpt2_load_weights(&model, model_file) != 0) {
+
+    if (gpt2_load_weights(&model, model_file) != 0)
+    {
         fprintf(stderr, "Failed to load GPT-2 weights\n");
         fclose(model_file);
         gpt2_free(&model);
@@ -154,28 +161,31 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     fclose(model_file);
-    
+
     printf("Model loaded successfully.\n");
-    
+
     // Load debug state file
     FILE *state_file = fopen("../models/gpt2_124M_debug_state.bin", "rb");
-    if (state_file == NULL) {
+    if (state_file == NULL)
+    {
         fprintf(stderr, "Error opening state file\n");
         gpt2_free(&model);
         gpt2_free(&g_model);
         return 1;
     }
-    
+
     int state_header[256];
     size_t items_read = fread(state_header, sizeof(int), 256, state_file);
-    if (items_read != 256) {
+    if (items_read != 256)
+    {
         fprintf(stderr, "Failed to read state header\n");
         fclose(state_file);
         gpt2_free(&model);
         gpt2_free(&g_model);
         return 1;
     }
-    if (state_header[0] != 20240327) {
+    if (state_header[0] != 20240327)
+    {
         fprintf(stderr, "Bad magic state file\n");
         fclose(state_file);
         gpt2_free(&model);
@@ -190,31 +200,33 @@ int main(int argc, char *argv[]) {
     //     return 1;
     // }
     printf("Version: %d\n", state_header[1]);
-    
+
     int B = state_header[2];
     int T = state_header[3];
     printf("[State]\n");
     printf("batch_size: %d\n", B);
     printf("seq_len: %d\n", T);
-    
+
     // Verify batch size matches
-    if (B != config.batch_size) {
+    if (B != config.batch_size)
+    {
         fprintf(stderr, "Batch size mismatch: config=%d, state=%d\n", config.batch_size, B);
         fclose(state_file);
         gpt2_free(&model);
         gpt2_free(&g_model);
         return 1;
     }
-    
+
     int V = config.vocab_size;
-    
+
     // Allocate CPU memory for inputs
     int *x = (int *)malloc(B * T * sizeof(int));
     int *y = (int *)malloc(B * T * sizeof(int));
-    
+
     // Read inputs from state file (skip logits, loss, and gradients)
     items_read = fread(x, sizeof(int), B * T, state_file);
-    if (items_read != B * T) {
+    if (items_read != B * T)
+    {
         fprintf(stderr, "Failed to read input x\n");
         fclose(state_file);
         free(x);
@@ -224,7 +236,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     items_read = fread(y, sizeof(int), B * T, state_file);
-    if (items_read != B * T) {
+    if (items_read != B * T)
+    {
         fprintf(stderr, "Failed to read input y\n");
         fclose(state_file);
         free(x);
@@ -233,25 +246,25 @@ int main(int argc, char *argv[]) {
         gpt2_free(&g_model);
         return 1;
     }
-    
+
     // Skip expected_logits, expected_loss, and expected_grads
-    fseek(state_file, B * T * V * sizeof(float), SEEK_CUR);  // skip logits
-    fseek(state_file, sizeof(float), SEEK_CUR);              // skip loss
-    fseek(state_file, model.num_parameters * sizeof(float), SEEK_CUR);  // skip grads
-    
+    fseek(state_file, B * T * V * sizeof(float), SEEK_CUR);            // skip logits
+    fseek(state_file, sizeof(float), SEEK_CUR);                        // skip loss
+    fseek(state_file, model.num_parameters * sizeof(float), SEEK_CUR); // skip grads
+
     fclose(state_file);
-    
+
     // Copy inputs to GPU
     int *d_input_tokens, *d_target_tokens;
     gpuErrchk(cudaMalloc(&d_input_tokens, B * T * sizeof(int)));
     gpuErrchk(cudaMalloc(&d_target_tokens, B * T * sizeof(int)));
     gpuErrchk(cudaMemcpy(d_input_tokens, x, B * T * sizeof(int), cudaMemcpyHostToDevice));
     gpuErrchk(cudaMemcpy(d_target_tokens, y, B * T * sizeof(int), cudaMemcpyHostToDevice));
-    
+
     // Setup training buffers
     setup_train_buffers(&buffers, T);
     setup_train_buffers(&g_buffers, T);
-    
+
     // Initialize optimizer state
     opt_state.learning_rate = 1e-4f;
     opt_state.beta1 = 0.9f;
@@ -261,38 +274,39 @@ int main(int argc, char *argv[]) {
     opt_state.t = 0;
     opt_state.m_memory = NULL;
     opt_state.v_memory = NULL;
-    
+
     float losses[10];
-    
+
     // Run 10 training iterations
-    for (int step = 0; step < 10; step++) {
+    for (int step = 0; step < 10; step++)
+    {
         struct timespec start, end;
         clock_gettime(CLOCK_MONOTONIC, &start);
-        
+
         // Forward pass
         forward(d_input_tokens, T);
-        
+
         // Compute loss
         cross_entropy(d_target_tokens, T);
         float mean_loss = compute_mean_loss(&buffers.losses, B, T);
-        
+
         // Zero gradients
         gpt2_zero_grad(&g_model);
         zero_activation_grads(&g_buffers);
-        
+
         // Backward pass
         backward(d_input_tokens, d_target_tokens, T);
-        
+
         // Update parameters
         gpt2_update(&model, &g_model, &opt_state);
-        
+
         clock_gettime(CLOCK_MONOTONIC, &end);
         double time_elapsed_s = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
-        
+
         printf("step %d: loss %f (took %f ms)\n", step, mean_loss, time_elapsed_s * 1000);
         losses[step] = mean_loss;
     }
-    
+
     // Check expected losses
     float expected_losses[10] = {
         5.270007133483887,
@@ -304,21 +318,24 @@ int main(int argc, char *argv[]) {
         1.3946564197540283,
         0.9991465210914612,
         0.6240804195404053,
-        0.37651097774505615
-    };
-    
+        0.37651097774505615};
+
     int allok = 1;
-    for (int i = 0; i < 10; i++) {
-        if (fabs(losses[i] - expected_losses[i]) >= 1e-2) {
+    for (int i = 0; i < 10; i++)
+    {
+        if (fabs(losses[i] - expected_losses[i]) >= 1e-2)
+        {
             printf("LOSS MISMATCH AT STEP %d: %f %f\n", i, losses[i], expected_losses[i]);
             allok = 0;
-        } else {
+        }
+        else
+        {
             printf("loss ok at step %d: %f %f\n", i, losses[i], expected_losses[i]);
         }
     }
-    
+
     printf("overall okay: %d\n", allok);
-    
+
     // Cleanup
     free(x);
     free(y);
@@ -326,11 +343,13 @@ int main(int argc, char *argv[]) {
     cudaFree(d_target_tokens);
     free_train_buffers(&buffers);
     free_train_buffers(&g_buffers);
-    if (opt_state.m_memory) cudaFree(opt_state.m_memory);
-    if (opt_state.v_memory) cudaFree(opt_state.v_memory);
+    if (opt_state.m_memory)
+        cudaFree(opt_state.m_memory);
+    if (opt_state.v_memory)
+        cudaFree(opt_state.v_memory);
     gpt2_free(&model);
     gpt2_free(&g_model);
-    
+
     return allok ? 0 : 1;
 }
 
@@ -403,7 +422,8 @@ static int setup_train_buffers(train_buffers_t *buffers, int seq_len)
 static void free_train_buffers(train_buffers_t *buffers)
 {
     tensor_free(&buffers->encoded);
-    for (int i = 0; i < config.n_layer; i++) {
+    for (int i = 0; i < config.n_layer; i++)
+    {
         layer_buffers_t *layer_bufs = &buffers->blocks[i];
 
         tensor_free(&layer_bufs->ln_1);
@@ -453,32 +473,33 @@ static void forward(const int *d_input_tokens, int seq_len)
 
         layernorm_forward<<<B, thr>>>(layer_bufs->ln_1.data, res.data, block->ln_1.w.data, block->ln_1.b.data, layer_bufs->ln_1_mean.data, layer_bufs->ln_1_rstd.data, S, h);
 
-        mlp_forward<<<MLP_FORWARD_GRID(h * 3, B, S), MLP_BLOCK_DIM>>>(layer_bufs->qkv.data, layer_bufs->ln_1.data, block->attn.qkv_w.data, block->attn.qkv_b.data, B, S, h, h * 3);
+        mlp_forward<TILE_SIZE><<<MLP_FORWARD_GRID(h * 3, B, S), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(layer_bufs->qkv.data, layer_bufs->ln_1.data, block->attn.qkv_w.data, block->attn.qkv_b.data, B, S, h, h * 3);
 
         attention_forward<<<CEIL_DIV(B * S * n_head, thr), thr>>>(layer_bufs->atty.data, layer_bufs->preatt.data, layer_bufs->att.data, layer_bufs->qkv.data, B, S, n_head, h);
 
-        mlp_forward<<<MLP_FORWARD_GRID(h, B, S), MLP_BLOCK_DIM>>>(layer_bufs->att_proj.data, layer_bufs->atty.data, block->attn.proj_w.data, block->attn.proj_b.data, B, S, h, h);
+        mlp_forward<TILE_SIZE><<<MLP_FORWARD_GRID(h, B, S), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(layer_bufs->att_proj.data, layer_bufs->atty.data, block->attn.proj_w.data, block->attn.proj_b.data, B, S, h, h);
         residual_forward<<<CEIL_DIV(B * S * h, thr), thr>>>(layer_bufs->res_2.data, layer_bufs->att_proj.data, res.data, B, S, h);
 
         layernorm_forward<<<B, thr>>>(layer_bufs->ln_2.data, layer_bufs->res_2.data, block->ln_2.w.data, block->ln_2.b.data, layer_bufs->ln_2_mean.data, layer_bufs->ln_2_rstd.data, S, h);
 
-        mlp_forward<<<MLP_FORWARD_GRID(h * 4, B, S), MLP_BLOCK_DIM>>>(layer_bufs->mlp_fc.data, layer_bufs->ln_2.data, block->mlp.fc_w.data, block->mlp.fc_b.data, B, S, h, h * 4);
+        mlp_forward<TILE_SIZE><<<MLP_FORWARD_GRID(h * 4, B, S), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(layer_bufs->mlp_fc.data, layer_bufs->ln_2.data, block->mlp.fc_w.data, block->mlp.fc_b.data, B, S, h, h * 4);
 
         gelu_forward<<<CEIL_DIV(B * S * 4 * h, thr), thr>>>(layer_bufs->mlp_fc_gelu.data, layer_bufs->mlp_fc.data, B, S, h * 4);
 
-        mlp_forward<<<MLP_FORWARD_GRID(h, B, S), MLP_BLOCK_DIM>>>(layer_bufs->mlp_proj.data, layer_bufs->mlp_fc_gelu.data, block->mlp.proj_w.data, block->mlp.proj_b.data, B, S, h * 4, h);
+        mlp_forward<TILE_SIZE><<<MLP_FORWARD_GRID(h, B, S), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(layer_bufs->mlp_proj.data, layer_bufs->mlp_fc_gelu.data, block->mlp.proj_w.data, block->mlp.proj_b.data, B, S, h * 4, h);
         residual_forward<<<CEIL_DIV(B * S * h, thr), thr>>>(layer_bufs->res_3.data, layer_bufs->mlp_proj.data, layer_bufs->res_2.data, B, S, h);
     }
 
     tensor_t res = buffers.blocks[L - 1].res_3;
     layernorm_forward<<<B, thr>>>(buffers.ln_f.data, res.data, model.ln_f.w.data, model.ln_f.b.data, buffers.ln_f_mean.data, buffers.ln_f_rstd.data, S, h);
 
-    mlp_forward<<<MLP_FORWARD_GRID(V, B, S), MLP_BLOCK_DIM>>>(buffers.logits.data, buffers.ln_f.data, model.emb.wte.data, NULL, B, S, h, V);
+    mlp_forward<TILE_SIZE><<<MLP_FORWARD_GRID(V, B, S), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(buffers.logits.data, buffers.ln_f.data, model.emb.wte.data, NULL, B, S, h, V);
 
     softmax_forward<<<CEIL_DIV(B * S * V, thr), thr>>>(buffers.probs.data, buffers.logits.data, B, S, V);
 }
 
-static void cross_entropy(const int *d_target_tokens, int seq_len) {
+static void cross_entropy(const int *d_target_tokens, int seq_len)
+{
     int B = config.batch_size;
     int S = seq_len;
     int V = config.vocab_size;
@@ -487,7 +508,8 @@ static void cross_entropy(const int *d_target_tokens, int seq_len) {
     cross_entropy_forward<<<CEIL_DIV(B * S, thr), thr>>>(buffers.losses.data, buffers.probs.data, d_target_tokens, B, S, V);
 }
 
-static void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len) {
+static void backward(const int *d_input_tokens, const int *d_target_tokens, int seq_len)
+{
     int L = config.n_layer;
     int B = config.batch_size;
     int S = seq_len;
@@ -499,8 +521,8 @@ static void backward(const int *d_input_tokens, const int *d_target_tokens, int 
 
     cross_entropy_backward<<<CEIL_DIV(B * S, thr), thr>>>(g_buffers.logits.data, buffers.probs.data, d_target_tokens, B, S, V);
 
-    mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_buffers.ln_f.data, g_buffers.logits.data, model.emb.wte.data, B, S, h, V);
-    mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(V, h), MLP_BLOCK_DIM>>>(g_model.emb.wte.data, NULL, g_buffers.logits.data, buffers.ln_f.data, B, S, h, V);
+    mlp_backward_input<TILE_SIZE><<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(g_buffers.ln_f.data, g_buffers.logits.data, model.emb.wte.data, B, S, h, V);
+    mlp_backward_weight<TILE_SIZE><<<MLP_BACKWARD_WEIGHT_GRID(V, h), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(g_model.emb.wte.data, NULL, g_buffers.logits.data, buffers.ln_f.data, B, S, h, V);
 
     tensor_t res = buffers.blocks[L - 1].res_3;
     tensor_t g_res = g_buffers.blocks[L - 1].res_3;
@@ -519,25 +541,25 @@ static void backward(const int *d_input_tokens, const int *d_target_tokens, int 
 
         residual_backward<<<CEIL_DIV(B * S * h, thr), thr>>>(g_layer_bufs->res_2.data, g_layer_bufs->mlp_proj.data, g_layer_bufs->res_3.data, B * S * h);
 
-        mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h * 4, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs->mlp_fc_gelu.data, g_layer_bufs->mlp_proj.data, block->mlp.proj_w.data, B, S, h * 4, h);
-        mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h, h * 4), MLP_BLOCK_DIM>>>(g_block->mlp.proj_w.data, g_block->mlp.proj_b.data, g_layer_bufs->mlp_proj.data, layer_bufs->mlp_fc_gelu.data, B, S, h * 4, h);
+        mlp_backward_input<TILE_SIZE><<<MLP_BACKWARD_INPUT_GRID(h * 4, B, S), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(g_layer_bufs->mlp_fc_gelu.data, g_layer_bufs->mlp_proj.data, block->mlp.proj_w.data, B, S, h * 4, h);
+        mlp_backward_weight<TILE_SIZE><<<MLP_BACKWARD_WEIGHT_GRID(h, h * 4), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(g_block->mlp.proj_w.data, g_block->mlp.proj_b.data, g_layer_bufs->mlp_proj.data, layer_bufs->mlp_fc_gelu.data, B, S, h * 4, h);
 
         gelu_backward<<<CEIL_DIV(B * S * 4 * h, thr), thr>>>(g_layer_bufs->mlp_fc.data, layer_bufs->mlp_fc.data, g_layer_bufs->mlp_fc_gelu.data, B * S * 4 * h);
 
-        mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs->ln_2.data, g_layer_bufs->mlp_fc.data, block->mlp.fc_w.data, B, S, h, h * 4);
-        mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h * 4, h), MLP_BLOCK_DIM>>>(g_block->mlp.fc_w.data, g_block->mlp.fc_b.data, g_layer_bufs->mlp_fc.data, layer_bufs->ln_2.data, B, S, h, h * 4);
+        mlp_backward_input<TILE_SIZE><<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(g_layer_bufs->ln_2.data, g_layer_bufs->mlp_fc.data, block->mlp.fc_w.data, B, S, h, h * 4);
+        mlp_backward_weight<TILE_SIZE><<<MLP_BACKWARD_WEIGHT_GRID(h * 4, h), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(g_block->mlp.fc_w.data, g_block->mlp.fc_b.data, g_layer_bufs->mlp_fc.data, layer_bufs->ln_2.data, B, S, h, h * 4);
 
         layernorm_backward<<<B, thr>>>(g_layer_bufs->res_2.data, g_block->ln_2.w.data, g_block->ln_2.b.data, g_layer_bufs->ln_2.data, layer_bufs->res_2.data, block->ln_2.w.data, layer_bufs->ln_2_mean.data, layer_bufs->ln_2_rstd.data, B, S, h);
 
         residual_backward<<<CEIL_DIV(B * S * h, thr), thr>>>(g_res.data, g_layer_bufs->att_proj.data, g_layer_bufs->res_2.data, B * S * h);
 
-        mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs->atty.data, g_layer_bufs->att_proj.data, block->attn.proj_w.data, B, S, h, h);
-        mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h, h), MLP_BLOCK_DIM>>>(g_block->attn.proj_w.data, g_block->attn.proj_b.data, g_layer_bufs->att_proj.data, layer_bufs->atty.data, B, S, h, h);
+        mlp_backward_input<TILE_SIZE><<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(g_layer_bufs->atty.data, g_layer_bufs->att_proj.data, block->attn.proj_w.data, B, S, h, h);
+        mlp_backward_weight<TILE_SIZE><<<MLP_BACKWARD_WEIGHT_GRID(h, h), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(g_block->attn.proj_w.data, g_block->attn.proj_b.data, g_layer_bufs->att_proj.data, layer_bufs->atty.data, B, S, h, h);
 
         attention_backward<<<CEIL_DIV(B * S * n_head, thr), thr>>>(g_layer_bufs->qkv.data, g_layer_bufs->preatt.data, g_layer_bufs->att.data, g_layer_bufs->atty.data, layer_bufs->qkv.data, layer_bufs->att.data, B, S, h, n_head);
 
-        mlp_backward_input<<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM>>>(g_layer_bufs->ln_1.data, g_layer_bufs->qkv.data, block->attn.qkv_w.data, B, S, h, h * 3);
-        mlp_backward_weight<<<MLP_BACKWARD_WEIGHT_GRID(h * 3, h), MLP_BLOCK_DIM>>>(g_block->attn.qkv_w.data, g_block->attn.qkv_b.data, g_layer_bufs->qkv.data, layer_bufs->ln_1.data, B, S, h, h * 3);
+        mlp_backward_input<TILE_SIZE><<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(g_layer_bufs->ln_1.data, g_layer_bufs->qkv.data, block->attn.qkv_w.data, B, S, h, h * 3);
+        mlp_backward_weight<TILE_SIZE><<<MLP_BACKWARD_WEIGHT_GRID(h * 3, h), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(g_block->attn.qkv_w.data, g_block->attn.qkv_b.data, g_layer_bufs->qkv.data, layer_bufs->ln_1.data, B, S, h, h * 3);
 
         layernorm_backward<<<B, thr>>>(g_res.data, g_block->ln_1.w.data, g_block->ln_1.b.data, g_layer_bufs->ln_1.data, res.data, block->ln_1.w.data, layer_bufs->ln_1_mean.data, layer_bufs->ln_1_rstd.data, B, S, h);
     }
@@ -545,21 +567,23 @@ static void backward(const int *d_input_tokens, const int *d_target_tokens, int 
     embedding_backward<<<CEIL_DIV(B * S, thr), thr>>>(g_model.emb.wte.data, g_model.emb.wpe.data, g_buffers.encoded.data, d_input_tokens, B, S, h);
 }
 
-static void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt) {
-    if (opt->m_memory == NULL) {
+static void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt)
+{
+    if (opt->m_memory == NULL)
+    {
         size_t num_params = model->num_parameters;
         gpuErrchk(cudaMalloc(&opt->m_memory, num_params * sizeof(float)));
         gpuErrchk(cudaMalloc(&opt->v_memory, num_params * sizeof(float)));
-        
+
         gpuErrchk(cudaMemset(opt->m_memory, 0, num_params * sizeof(float)));
         gpuErrchk(cudaMemset(opt->v_memory, 0, num_params * sizeof(float)));
     }
-    
+
     opt->t++;
-    
+
     int thr = 256;
     int num_blocks = CEIL_DIV(model->num_parameters, thr);
-    
+
     adamw_kernel<<<num_blocks, thr>>>(
         model->params_memory,
         grads->params_memory,
@@ -571,22 +595,24 @@ static void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt) {
         opt->beta2,
         opt->eps,
         opt->weight_decay,
-        opt->t
-    );
-    
+        opt->t);
+
     gpuErrchk(cudaGetLastError());
 }
 
-static void gpt2_zero_grad(gpt2_t *grads) {
+static void gpt2_zero_grad(gpt2_t *grads)
+{
     cudaMemset(grads->params_memory, 0, grads->num_parameters * sizeof(float));
 }
 
-static void zero_activation_grads(train_buffers_t *g_buffers) {
+static void zero_activation_grads(train_buffers_t *g_buffers)
+{
     cudaMemset(g_buffers->encoded.data, 0, tensor_size(g_buffers->encoded) * sizeof(float));
-    
-    for (int i = 0; i < config.n_layer; i++) {
+
+    for (int i = 0; i < config.n_layer; i++)
+    {
         layer_buffers_t *g_layer = &g_buffers->blocks[i];
-        
+
         cudaMemset(g_layer->ln_1.data, 0, tensor_size(g_layer->ln_1) * sizeof(float));
         cudaMemset(g_layer->ln_1_mean.data, 0, tensor_size(g_layer->ln_1_mean) * sizeof(float));
         cudaMemset(g_layer->ln_1_rstd.data, 0, tensor_size(g_layer->ln_1_rstd) * sizeof(float));
@@ -604,7 +630,7 @@ static void zero_activation_grads(train_buffers_t *g_buffers) {
         cudaMemset(g_layer->mlp_proj.data, 0, tensor_size(g_layer->mlp_proj) * sizeof(float));
         cudaMemset(g_layer->res_3.data, 0, tensor_size(g_layer->res_3) * sizeof(float));
     }
-    
+
     cudaMemset(g_buffers->ln_f.data, 0, tensor_size(g_buffers->ln_f) * sizeof(float));
     cudaMemset(g_buffers->ln_f_mean.data, 0, tensor_size(g_buffers->ln_f_mean) * sizeof(float));
     cudaMemset(g_buffers->ln_f_rstd.data, 0, tensor_size(g_buffers->ln_f_rstd) * sizeof(float));
