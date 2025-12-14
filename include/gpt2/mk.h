@@ -7,6 +7,8 @@
 #include "gpt2/tensor.h"
 
 #define MAX_INSTR_PER_SM 2000
+#define NUM_SM 28
+
 
 typedef struct {
     int op;

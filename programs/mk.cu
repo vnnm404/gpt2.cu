@@ -30,7 +30,6 @@
 #include "layers/adamw.cu"
 
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
-#define NUM_SM 82
 
 // ============================================================================
 // Compile-time constants for megakernel pointer arithmetic

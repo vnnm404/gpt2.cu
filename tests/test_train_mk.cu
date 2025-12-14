@@ -25,8 +25,6 @@
 #include "gpt2/mk.h"
 #include "gpt2/train.h"
 
-#define NUM_SM 28
-
 #define gpuErrchk(ans)                        \
     {                                         \
         gpuAssert((ans), __FILE__, __LINE__); \
