@@ -344,16 +344,18 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
             prev_op = op;
         }
 
-        // OP 4: Attention - [CEIL_DIV(B * S * n_head, thr) blocks, 1D grid]
+        // OP 4: Attention - [ATTN_FWD_GRID(B, S, n_head) blocks, 2D grid]
         {
             int op = 4;
             // int bar_idx = 1 + layer_idx * 10 + 1;
             int bar_idx = bar_idx_counter++;
-            dim3 grid = MLP_FORWARD_GRID(h * 3, B, S);
-            int expected = grid.x * grid.y;
-            int num_blocks = CEIL_DIV(B * S * n_head, thr);
+            dim3 grid_prev = MLP_FORWARD_GRID(h * 3, B, S);
+            int expected = grid_prev.x * grid_prev.y;
+            dim3 grid = ATTN_FWD_GRID(B, S, n_head);
+            int num_blocks_x = grid.x;
+            int num_blocks_y = grid.y;
 
-            add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
+            add_instructions_2d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks_x, num_blocks_y);
             prev_op = op;
         }
 
@@ -362,7 +364,8 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
             int op = 5;
             // int bar_idx = 1 + layer_idx * 10 + 2;
             int bar_idx = bar_idx_counter++;
-            int expected = CEIL_DIV(B * S * n_head, thr);
+            dim3 grid_prev = ATTN_FWD_GRID(B, S, n_head);
+            int expected = grid_prev.x * grid_prev.y;
             dim3 grid = MLP_FORWARD_GRID(h, B, S);
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
@@ -699,16 +702,18 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
             prev_op = op;
         }
 
-        // OP 30: Attention backward - [CEIL_DIV(B * S * n_head, thr) blocks, 1D grid]
+        // OP 30: Attention backward - [ATTN_BWD_GRID(B, S, n_head) blocks, 2D grid]
         {
             int op = 30;
             // int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 9;
             int bar_idx = bar_idx_counter++;
             dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(h, h);
             int expected = grid_prev.x * grid_prev.y;
-            int num_blocks = CEIL_DIV(B * S * n_head, thr);
+            dim3 grid = ATTN_BWD_GRID(B, S, n_head);
+            int num_blocks_x = grid.x;
+            int num_blocks_y = grid.y;
 
-            add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
+            add_instructions_2d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks_x, num_blocks_y);
             prev_op = op;
         }
 
@@ -717,7 +722,8 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
             int op = 31;
             // int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 10;
             int bar_idx = bar_idx_counter++;
-            int expected = CEIL_DIV(B * S * n_head, thr);
+            dim3 grid_prev = ATTN_BWD_GRID(B, S, n_head);
+            int expected = grid_prev.x * grid_prev.y;
             dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
@@ -1143,10 +1149,16 @@ __device__ void execute_instruction(
 
     case 4:
     {
-        // OP 4: Attention
-        for (int b_x = start_b_x; b_x <= end_b_x; b_x++)
+        // OP 4: Attention (2D grid: blockIdx_x = b*NH+h, blockIdx_y = t)
+        dim3 grid = ATTN_FWD_GRID(B, S, n_head);
+        int num_blocks_x = grid.x;
+        int start_linear = start_b_y * num_blocks_x + start_b_x;
+        int end_linear = end_b_y * num_blocks_x + end_b_x;
+        for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++)
         {
-            attention_forward_device(MK_ACT_ATTY(acts, instr.layer), MK_ACT_PREATT(acts, instr.layer), MK_ACT_ATT(acts, instr.layer), MK_ACT_QKV(acts, instr.layer), B, S, n_head, h, b_x);
+            int b_y = linear_idx / num_blocks_x;
+            int b_x = linear_idx % num_blocks_x;
+            attention_forward_device(MK_ACT_ATTY(acts, instr.layer), MK_ACT_PREATT(acts, instr.layer), MK_ACT_ATT(acts, instr.layer), MK_ACT_QKV(acts, instr.layer), B, S, n_head, h, b_x, b_y);
         }
         break;
     }
@@ -1477,10 +1489,16 @@ __device__ void execute_instruction(
 
     case 30:
     {
-        // OP 30: Attention backward
-        for (int b_x = start_b_x; b_x <= end_b_x; b_x++)
+        // OP 30: Attention backward (2D grid: blockIdx_x = b*NH+h, blockIdx_y = t2)
+        dim3 grid = ATTN_BWD_GRID(B, S, n_head);
+        int num_blocks_x = grid.x;
+        int start_linear = start_b_y * num_blocks_x + start_b_x;
+        int end_linear = end_b_y * num_blocks_x + end_b_x;
+        for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++)
         {
-            attention_backward_device(MK_ACT_QKV(grad_acts, instr.layer), MK_ACT_PREATT(grad_acts, instr.layer), MK_ACT_ATT(grad_acts, instr.layer), MK_ACT_ATTY(grad_acts, instr.layer), MK_ACT_QKV(acts, instr.layer), MK_ACT_ATT(acts, instr.layer), B, S, h, n_head, b_x);
+            int b_y = linear_idx / num_blocks_x;
+            int b_x = linear_idx % num_blocks_x;
+            attention_backward_device(MK_ACT_QKV(grad_acts, instr.layer), MK_ACT_PREATT(grad_acts, instr.layer), MK_ACT_ATT(grad_acts, instr.layer), MK_ACT_ATTY(grad_acts, instr.layer), MK_ACT_QKV(acts, instr.layer), MK_ACT_ATT(acts, instr.layer), B, S, h, n_head, b_x, b_y);
         }
         break;
     }

@@ -353,7 +353,7 @@ void forward(config_t config, gpt2_t model, train_buffers_t buffers, const int *
 
         mlp_forward<TILE_SIZE><<<MLP_FORWARD_GRID(h * 3, B, S), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(layer_bufs->qkv.data, layer_bufs->ln_1.data, block->attn.qkv_w.data, block->attn.qkv_b.data, B, S, h, h * 3);
 
-        attention_forward<<<CEIL_DIV(B * S * n_head, thr), thr>>>(layer_bufs->atty.data, layer_bufs->preatt.data, layer_bufs->att.data, layer_bufs->qkv.data, B, S, n_head, h);
+        attention_forward<<<ATTN_FWD_GRID(B, S, n_head), ATTN_FWD_BLOCK(h / n_head), ATTN_FWD_SMEM(S, h / n_head)>>>(layer_bufs->atty.data, layer_bufs->preatt.data, layer_bufs->att.data, layer_bufs->qkv.data, B, S, n_head, h);
 
         mlp_forward<TILE_SIZE><<<MLP_FORWARD_GRID(h, B, S), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(layer_bufs->att_proj.data, layer_bufs->atty.data, block->attn.proj_w.data, block->attn.proj_b.data, B, S, h, h);
         residual_forward<<<CEIL_DIV(B * S * h, thr), thr>>>(layer_bufs->res_2.data, layer_bufs->att_proj.data, res.data, B, S, h);
@@ -434,7 +434,7 @@ void backward(config_t config, gpt2_t model, train_buffers_t buffers, gpt2_t g_m
         mlp_backward_input<TILE_SIZE><<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(g_layer_bufs->atty.data, g_layer_bufs->att_proj.data, block->attn.proj_w.data, B, S, h, h);
         mlp_backward_weight<TILE_SIZE><<<MLP_BACKWARD_WEIGHT_GRID(h, h), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(g_block->attn.proj_w.data, g_block->attn.proj_b.data, g_layer_bufs->att_proj.data, layer_bufs->atty.data, B, S, h, h);
 
-        attention_backward<<<CEIL_DIV(B * S * n_head, thr), thr>>>(g_layer_bufs->qkv.data, g_layer_bufs->preatt.data, g_layer_bufs->att.data, g_layer_bufs->atty.data, layer_bufs->qkv.data, layer_bufs->att.data, B, S, h, n_head);
+        attention_backward<<<ATTN_BWD_GRID(B, S, n_head), ATTN_BWD_BLOCK(h / n_head), ATTN_BWD_SMEM(S, h / n_head)>>>(g_layer_bufs->qkv.data, g_layer_bufs->preatt.data, g_layer_bufs->att.data, g_layer_bufs->atty.data, layer_bufs->qkv.data, layer_bufs->att.data, B, S, h, n_head);
 
         mlp_backward_input<TILE_SIZE><<<MLP_BACKWARD_INPUT_GRID(h, B, S), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(g_layer_bufs->ln_1.data, g_layer_bufs->qkv.data, block->attn.qkv_w.data, B, S, h, h * 3);
         mlp_backward_weight<TILE_SIZE><<<MLP_BACKWARD_WEIGHT_GRID(h * 3, h), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(g_block->attn.qkv_w.data, g_block->attn.qkv_b.data, g_layer_bufs->qkv.data, layer_bufs->ln_1.data, B, S, h, h * 3);
