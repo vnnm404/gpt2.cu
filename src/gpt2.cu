@@ -258,6 +258,61 @@ int gpt2_load_weights(gpt2_t *model, FILE *file)
     return 0;
 }
 
+int gpt2_dump_weights(gpt2_t *model, FILE *file)
+{
+    // emb
+    if (tensor_dump(&model->emb.wte, file) != 0)
+        return -2;
+    if (tensor_dump(&model->emb.wpe, file) != 0)
+        return -3;
+
+    // layers
+    for (int i = 0; i < NUM_LAYERS; i++)
+    {
+        block_t *block = &model->h[i];
+
+        // ln_1
+        if (tensor_dump(&block->ln_1.w, file) != 0)
+            return -1;
+        if (tensor_dump(&block->ln_1.b, file) != 0)
+            return -1;
+
+        // attn
+        if (tensor_dump(&block->attn.qkv_w, file) != 0)
+            return -1;
+        if (tensor_dump(&block->attn.qkv_b, file) != 0)
+            return -1;
+        if (tensor_dump(&block->attn.proj_w, file) != 0)
+            return -1;
+        if (tensor_dump(&block->attn.proj_b, file) != 0)
+            return -1;
+
+        // ln_2
+        if (tensor_dump(&block->ln_2.w, file) != 0)
+            return -1;
+        if (tensor_dump(&block->ln_2.b, file) != 0)
+            return -1;
+
+        // mlp
+        if (tensor_dump(&block->mlp.fc_w, file) != 0)
+            return -1;
+        if (tensor_dump(&block->mlp.fc_b, file) != 0)
+            return -1;
+        if (tensor_dump(&block->mlp.proj_w, file) != 0)
+            return -1;
+        if (tensor_dump(&block->mlp.proj_b, file) != 0)
+            return -1;
+    }
+
+    // final layer norm
+    if (tensor_dump(&model->ln_f.w, file) != 0)
+        return -4;
+    if (tensor_dump(&model->ln_f.b, file) != 0)
+        return -5;
+
+    return 0;
+}
+
 void gpt2_free(gpt2_t *model)
 {
     // Free the single contiguous parameter memory block

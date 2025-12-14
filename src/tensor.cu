@@ -77,6 +77,56 @@ int tensor_load(tensor_t *tensor, FILE *file)
 
     return 0; // success
 }
+#include <sys/stat.h>
+#include <unistd.h> // For POSIX systems
+long long get_file_size_fstat(FILE* fp) {
+    int fd = fileno(fp);
+    struct stat buf;
+    if (fstat(fd, &buf) == 0) {
+        return buf.st_size; // st_size is a 64-bit off_t type
+    }
+    return -1; // Error
+}
+
+
+int tensor_dump(const tensor_t *tensor, FILE *file)
+{
+    int size = tensor_size(*tensor);
+    float buffer[CHUNK_SIZE]; // Stack buffer for chunked writing
+    int remaining = size;
+    printf("size(%d, %d)\n", get_file_size_fstat(file), size);
+    int offset = 0;
+
+    while (remaining > 0)
+    {
+        int chunk = (remaining < CHUNK_SIZE) ? remaining : CHUNK_SIZE;
+
+        // Copy chunk from GPU memory to CPU buffer
+        cudaError_t err = cudaMemcpy(buffer,
+                                     tensor->data + offset,
+                                     chunk * sizeof(float),
+                                     cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess)
+        {
+            return -1; // error copying from GPU
+        }
+
+        // Write chunk to file
+        size_t written = fwrite(buffer, sizeof(float), chunk, file);
+        if (written != (size_t)chunk)
+        {
+            return -1; // error writing
+        }
+
+        offset += chunk;
+        remaining -= chunk;
+    }
+
+    fflush(stdout);
+
+    return 0; // success
+}
+
 
 void tensor_free(tensor_t *tensor)
 {
