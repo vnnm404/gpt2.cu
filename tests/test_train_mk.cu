@@ -226,8 +226,8 @@ int main(int argc, char *argv[])
     int bar_size = 4 * config.batch_size * (1 + (config.n_layer * 10 + 3) + 1 + (5 + config.n_layer * 14 + 1));
     gpuErrchk(cudaMalloc(&bar, bar_size * sizeof(int)));
 
-    int shared_mem_size = 2 * TILE_SIZE * TILE_SIZE * sizeof(float);
-    int threads_per_block = 1024;
+    int shared_mem_size = 4 * TILE_SIZE * TILE_SIZE * sizeof(float); // Double-buffered: 4x space
+    int threads_per_block = 256;                                     // Limited due to register pressure from template MLP functions
     printf("Shared memory size per block: %d bytes\n", shared_mem_size);
 
     // Allocate timing buffers for SM timing measurement

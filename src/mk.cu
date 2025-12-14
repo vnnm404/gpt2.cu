@@ -286,7 +286,7 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
     int h = config.n_embd;
     int n_head = config.n_head;
     int V = config.vocab_size;
-    int thr = 1024;
+    int thr = 256;
 
     for (int sm = 0; sm < NUM_SM; sm++)
     {
@@ -1136,7 +1136,7 @@ __device__ void execute_instruction(
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
-            mlp_forward_device(MK_ACT_QKV(acts, instr.layer), MK_ACT_LN1(acts, instr.layer), MK_QKV_W(params, instr.layer), MK_QKV_B(params, instr.layer), B, S, h, h * 3, b_x, b_y, shared_mem);
+            mlp_forward_device<TILE_SIZE>(MK_ACT_QKV(acts, instr.layer), MK_ACT_LN1(acts, instr.layer), MK_QKV_W(params, instr.layer), MK_QKV_B(params, instr.layer), B, S, h, h * 3, b_x, b_y, shared_mem);
         }
         break;
     }
@@ -1162,7 +1162,7 @@ __device__ void execute_instruction(
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
-            mlp_forward_device(MK_ACT_ATT_PROJ(acts, instr.layer), MK_ACT_ATTY(acts, instr.layer), MK_ATTN_PROJ_W(params, instr.layer), MK_ATTN_PROJ_B(params, instr.layer), B, S, h, h, b_x, b_y, shared_mem);
+            mlp_forward_device<TILE_SIZE>(MK_ACT_ATT_PROJ(acts, instr.layer), MK_ACT_ATTY(acts, instr.layer), MK_ATTN_PROJ_W(params, instr.layer), MK_ATTN_PROJ_B(params, instr.layer), B, S, h, h, b_x, b_y, shared_mem);
         }
         break;
     }
@@ -1199,7 +1199,7 @@ __device__ void execute_instruction(
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
-            mlp_forward_device(MK_ACT_MLP_FC(acts, instr.layer), MK_ACT_LN2(acts, instr.layer), MK_MLP_FC_W(params, instr.layer), MK_MLP_FC_B(params, instr.layer), B, S, h, h * 4, b_x, b_y, shared_mem);
+            mlp_forward_device<TILE_SIZE>(MK_ACT_MLP_FC(acts, instr.layer), MK_ACT_LN2(acts, instr.layer), MK_MLP_FC_W(params, instr.layer), MK_MLP_FC_B(params, instr.layer), B, S, h, h * 4, b_x, b_y, shared_mem);
         }
         break;
     }
@@ -1225,7 +1225,7 @@ __device__ void execute_instruction(
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
-            mlp_forward_device(MK_ACT_MLP_PROJ(acts, instr.layer), MK_ACT_MLP_FC_GELU(acts, instr.layer), MK_MLP_PROJ_W(params, instr.layer), MK_MLP_PROJ_B(params, instr.layer), B, S, h * 4, h, b_x, b_y, shared_mem);
+            mlp_forward_device<TILE_SIZE>(MK_ACT_MLP_PROJ(acts, instr.layer), MK_ACT_MLP_FC_GELU(acts, instr.layer), MK_MLP_PROJ_W(params, instr.layer), MK_MLP_PROJ_B(params, instr.layer), B, S, h * 4, h, b_x, b_y, shared_mem);
         }
         break;
     }
@@ -1261,7 +1261,7 @@ __device__ void execute_instruction(
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
-            mlp_forward_device(MK_ACT_LOGITS(acts), MK_ACT_LN_F(acts), MK_WTE(params), NULL, B, S, h, V, b_x, b_y, shared_mem);
+            mlp_forward_device<TILE_SIZE>(MK_ACT_LOGITS(acts), MK_ACT_LN_F(acts), MK_WTE(params), NULL, B, S, h, V, b_x, b_y, shared_mem);
         }
         break;
     }
@@ -1307,7 +1307,7 @@ __device__ void execute_instruction(
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
-            mlp_backward_input_device(MK_ACT_LN_F(grad_acts), MK_ACT_LOGITS(grad_acts), MK_WTE(params), B, S, h, V, b_x, b_y, shared_mem);
+            mlp_backward_input_device<TILE_SIZE>(MK_ACT_LN_F(grad_acts), MK_ACT_LOGITS(grad_acts), MK_WTE(params), B, S, h, V, b_x, b_y, shared_mem);
         }
         break;
     }
@@ -1323,7 +1323,7 @@ __device__ void execute_instruction(
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
-            mlp_backward_weight_device(MK_WTE(grads), NULL, MK_ACT_LOGITS(grad_acts), MK_ACT_LN_F(acts), B, S, h, V, b_x, b_y, shared_mem);
+            mlp_backward_weight_device<TILE_SIZE>(MK_WTE(grads), NULL, MK_ACT_LOGITS(grad_acts), MK_ACT_LN_F(acts), B, S, h, V, b_x, b_y, shared_mem);
         }
         break;
     }
@@ -1359,7 +1359,7 @@ __device__ void execute_instruction(
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
-            mlp_backward_input_device(MK_ACT_MLP_FC_GELU(grad_acts, instr.layer), MK_ACT_MLP_PROJ(grad_acts, instr.layer), MK_MLP_PROJ_W(params, instr.layer), B, S, h * 4, h, b_x, b_y, shared_mem);
+            mlp_backward_input_device<TILE_SIZE>(MK_ACT_MLP_FC_GELU(grad_acts, instr.layer), MK_ACT_MLP_PROJ(grad_acts, instr.layer), MK_MLP_PROJ_W(params, instr.layer), B, S, h * 4, h, b_x, b_y, shared_mem);
         }
         break;
     }
@@ -1375,7 +1375,7 @@ __device__ void execute_instruction(
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
-            mlp_backward_weight_device(MK_MLP_PROJ_W(grads, instr.layer), MK_MLP_PROJ_B(grads, instr.layer), MK_ACT_MLP_PROJ(grad_acts, instr.layer), MK_ACT_MLP_FC_GELU(acts, instr.layer), B, S, h * 4, h, b_x, b_y, shared_mem);
+            mlp_backward_weight_device<TILE_SIZE>(MK_MLP_PROJ_W(grads, instr.layer), MK_MLP_PROJ_B(grads, instr.layer), MK_ACT_MLP_PROJ(grad_acts, instr.layer), MK_ACT_MLP_FC_GELU(acts, instr.layer), B, S, h * 4, h, b_x, b_y, shared_mem);
         }
         break;
     }
@@ -1401,7 +1401,7 @@ __device__ void execute_instruction(
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
-            mlp_backward_input_device(MK_ACT_LN2(grad_acts, instr.layer), MK_ACT_MLP_FC(grad_acts, instr.layer), MK_MLP_FC_W(params, instr.layer), B, S, h, h * 4, b_x, b_y, shared_mem);
+            mlp_backward_input_device<TILE_SIZE>(MK_ACT_LN2(grad_acts, instr.layer), MK_ACT_MLP_FC(grad_acts, instr.layer), MK_MLP_FC_W(params, instr.layer), B, S, h, h * 4, b_x, b_y, shared_mem);
         }
         break;
     }
@@ -1417,7 +1417,7 @@ __device__ void execute_instruction(
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
-            mlp_backward_weight_device(MK_MLP_FC_W(grads, instr.layer), MK_MLP_FC_B(grads, instr.layer), MK_ACT_MLP_FC(grad_acts, instr.layer), MK_ACT_LN2(acts, instr.layer), B, S, h, h * 4, b_x, b_y, shared_mem);
+            mlp_backward_weight_device<TILE_SIZE>(MK_MLP_FC_W(grads, instr.layer), MK_MLP_FC_B(grads, instr.layer), MK_ACT_MLP_FC(grad_acts, instr.layer), MK_ACT_LN2(acts, instr.layer), B, S, h, h * 4, b_x, b_y, shared_mem);
         }
         break;
     }
@@ -1454,7 +1454,7 @@ __device__ void execute_instruction(
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
-            mlp_backward_input_device(MK_ACT_ATTY(grad_acts, instr.layer), MK_ACT_ATT_PROJ(grad_acts, instr.layer), MK_ATTN_PROJ_W(params, instr.layer), B, S, h, h, b_x, b_y, shared_mem);
+            mlp_backward_input_device<TILE_SIZE>(MK_ACT_ATTY(grad_acts, instr.layer), MK_ACT_ATT_PROJ(grad_acts, instr.layer), MK_ATTN_PROJ_W(params, instr.layer), B, S, h, h, b_x, b_y, shared_mem);
         }
         break;
     }
@@ -1470,7 +1470,7 @@ __device__ void execute_instruction(
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
-            mlp_backward_weight_device(MK_ATTN_PROJ_W(grads, instr.layer), MK_ATTN_PROJ_B(grads, instr.layer), MK_ACT_ATT_PROJ(grad_acts, instr.layer), MK_ACT_ATTY(acts, instr.layer), B, S, h, h, b_x, b_y, shared_mem);
+            mlp_backward_weight_device<TILE_SIZE>(MK_ATTN_PROJ_W(grads, instr.layer), MK_ATTN_PROJ_B(grads, instr.layer), MK_ACT_ATT_PROJ(grad_acts, instr.layer), MK_ACT_ATTY(acts, instr.layer), B, S, h, h, b_x, b_y, shared_mem);
         }
         break;
     }
@@ -1496,7 +1496,7 @@ __device__ void execute_instruction(
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
-            mlp_backward_input_device(MK_ACT_LN1(grad_acts, instr.layer), MK_ACT_QKV(grad_acts, instr.layer), MK_QKV_W(params, instr.layer), B, S, h, h * 3, b_x, b_y, shared_mem);
+            mlp_backward_input_device<TILE_SIZE>(MK_ACT_LN1(grad_acts, instr.layer), MK_ACT_QKV(grad_acts, instr.layer), MK_QKV_W(params, instr.layer), B, S, h, h * 3, b_x, b_y, shared_mem);
         }
         break;
     }
@@ -1512,7 +1512,7 @@ __device__ void execute_instruction(
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
-            mlp_backward_weight_device(MK_QKV_W(grads, instr.layer), MK_QKV_B(grads, instr.layer), MK_ACT_QKV(grad_acts, instr.layer), MK_ACT_LN1(acts, instr.layer), B, S, h, h * 3, b_x, b_y, shared_mem);
+            mlp_backward_weight_device<TILE_SIZE>(MK_QKV_W(grads, instr.layer), MK_QKV_B(grads, instr.layer), MK_ACT_QKV(grad_acts, instr.layer), MK_ACT_LN1(acts, instr.layer), B, S, h, h * 3, b_x, b_y, shared_mem);
         }
         break;
     }
