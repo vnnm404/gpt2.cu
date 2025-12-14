@@ -318,13 +318,13 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
     // Forward pass through layers
     for (int layer_idx = 0; layer_idx < L; layer_idx++)
     {
-        // OP 2: LayerNorm 1 - [B blocks, 1D grid]
+        // OP 2: LayerNorm 1 - [B*S blocks, 1D grid]
         {
             int op = 2;
             // int bar_idx = (layer_idx == 0) ? 0 : (1 + (layer_idx - 1) * 10 + 9);
             int bar_idx = bar_idx_counter++;
             int expected = (layer_idx == 0) ? B : CEIL_DIV(B * S * h, thr);
-            int num_blocks = B;
+            int num_blocks = B * S;
 
             add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
@@ -335,7 +335,7 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
             int op = 3;
             // int bar_idx = 1 + layer_idx * 10;
             int bar_idx = bar_idx_counter++;
-            int expected = B;
+            int expected = B * S;
             dim3 grid = MLP_FORWARD_GRID(h * 3, B, S);
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
@@ -387,13 +387,13 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
             prev_op = op;
         }
 
-        // OP 7: LayerNorm 2 - [B blocks, 1D grid]
+        // OP 7: LayerNorm 2 - [B*S blocks, 1D grid]
         {
             int op = 7;
             // int bar_idx = 1 + layer_idx * 10 + 4;
             int bar_idx = bar_idx_counter++;
             int expected = CEIL_DIV(B * S * h, thr);
-            int num_blocks = B;
+            int num_blocks = B * S;
 
             add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
@@ -404,7 +404,7 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
             int op = 8;
             // int bar_idx = 1 + layer_idx * 10 + 5;
             int bar_idx = bar_idx_counter++;
-            int expected = B;
+            int expected = B * S;
             dim3 grid = MLP_FORWARD_GRID(h * 4, B, S);
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
@@ -454,13 +454,13 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
         }
     }
 
-    // OP 12: Final LayerNorm - [B blocks, 1D grid]
+    // OP 12: Final LayerNorm - [B*S blocks, 1D grid]
     {
         int op = 12;
         // int bar_idx = 1 + (L - 1) * 10 + 9;
         int bar_idx = bar_idx_counter++;
         int expected = CEIL_DIV(B * S * h, thr);
-        int num_blocks = B;
+        int num_blocks = B * S;
 
         add_instructions_1d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks);
         prev_op = op;
@@ -471,7 +471,7 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
         int op = 13;
         // int bar_idx = 1 + (L * 10) + 0;
         int bar_idx = bar_idx_counter++;
-        int expected = B;
+        int expected = B * S;
         dim3 grid = MLP_FORWARD_GRID(V, B, S);
         int num_blocks_x = grid.x;
         int num_blocks_y = grid.y;
@@ -549,14 +549,14 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
         prev_op = op;
     }
 
-    // OP 19: Final LayerNorm backward - [B blocks, 1D grid]
+    // OP 19: Final LayerNorm backward - [B*S blocks, 1D grid]
     {
         int op = 19;
         // int bar_idx = 1 + (L * 10) + 3 + 3;
         int bar_idx = bar_idx_counter++;
         dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(V, h);
         int expected = grid_prev.x * grid_prev.y;
-        int num_blocks = B;
+        int num_blocks = B * S;
 
         add_instructions_1d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks);
         prev_op = op;
@@ -570,7 +570,7 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
             int op = 20;
             // int bar_idx = (layer_idx == L - 1) ? (1 + (L * 10) + 3 + 4) : (1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) - 1) * 14 + 13);
             int bar_idx = bar_idx_counter++;
-            int expected = B;
+            int expected = B * S;
             int num_blocks = CEIL_DIV(B * S * h, thr);
 
             add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
@@ -648,14 +648,14 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
             prev_op = op;
         }
 
-        // OP 26: LayerNorm 2 backward - [B blocks, 1D grid]
+        // OP 26: LayerNorm 2 backward - [B*S blocks, 1D grid]
         {
             int op = 26;
             // int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 5;
             int bar_idx = bar_idx_counter++;
             dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(h * 4, h);
             int expected = grid_prev.x * grid_prev.y;
-            int num_blocks = B;
+            int num_blocks = B * S;
 
             add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
@@ -666,7 +666,7 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
             int op = 27;
             // int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 6;
             int bar_idx = bar_idx_counter++;
-            int expected = B;
+            int expected = B * S;
             int num_blocks = CEIL_DIV(B * S * h, thr);
 
             add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
@@ -747,14 +747,14 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
             prev_op = op;
         }
 
-        // OP 33: LayerNorm 1 backward - [B blocks, 1D grid]
+        // OP 33: LayerNorm 1 backward - [B*S blocks, 1D grid]
         {
             int op = 33;
             // int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14) + 12;
             int bar_idx = bar_idx_counter++;
             dim3 grid_prev = MLP_BACKWARD_WEIGHT_GRID(h * 3, h);
             int expected = grid_prev.x * grid_prev.y;
-            int num_blocks = B;
+            int num_blocks = B * S;
 
             add_instructions_1d(all_instructions, &instruction_count, op, prev_op, layer_idx, bar_idx, expected, num_blocks);
             prev_op = op;
@@ -766,7 +766,7 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
         int op = 34;
         // int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1) * 14) + 13;
         int bar_idx = bar_idx_counter++;
-        int expected = B;
+        int expected = B * S;
         int num_blocks = CEIL_DIV(B * S, thr);
 
         add_instructions_1d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks);
