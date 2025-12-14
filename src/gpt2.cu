@@ -7,16 +7,18 @@
 #include "gpt2/gpt2.h"
 #include "gpt2/tensor.h"
 
-int gpt2_initialize(gpt2_t *model, const config_t *config) {
+int gpt2_initialize(gpt2_t *model, const config_t *config)
+{
     // Calculate total size needed for all parameters
     size_t total_params = 0;
-    
+
     // emb: wte (h, V) + wpe (maxT, h)
     total_params += config->n_embd * config->vocab_size;
     total_params += config->n_positions * config->n_embd;
-    
+
     // per layer: ln_1 (w, b), attn (qkv_w, qkv_b, proj_w, proj_b), ln_2 (w, b), mlp (fc_w, fc_b, proj_w, proj_b)
-    for (int i = 0; i < config->n_layer; i++) {
+    for (int i = 0; i < config->n_layer; i++)
+    {
         total_params += config->n_embd;                      // ln_1.w
         total_params += config->n_embd;                      // ln_1.b
         total_params += config->n_embd * 3 * config->n_embd; // attn.qkv_w
@@ -30,20 +32,21 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
         total_params += 4 * config->n_embd * config->n_embd; // mlp.proj_w
         total_params += config->n_embd;                      // mlp.proj_b
     }
-    
+
     // final layer norm: ln_f (w, b)
     total_params += config->n_embd; // ln_f.w
     total_params += config->n_embd; // ln_f.b
-    
+
     // Allocate single contiguous block on GPU
     cudaError_t err = cudaMalloc(&model->params_memory, total_params * sizeof(float));
-    if (err != cudaSuccess) {
+    if (err != cudaSuccess)
+    {
         return -1;
     }
-    
+
     // Now set up tensor structures with pointers into this block
     float *ptr = model->params_memory;
-    
+
     // emb
     int shape_wte[] = {config->n_embd, config->vocab_size};
     model->emb.wte.ndim = 2;
@@ -53,7 +56,7 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
     model->emb.wte.shape[3] = 0;
     model->emb.wte.data = ptr;
     ptr += config->n_embd * config->vocab_size;
-    
+
     int shape_wpe[] = {config->n_positions, config->n_embd};
     model->emb.wpe.ndim = 2;
     model->emb.wpe.shape[0] = shape_wpe[0];
@@ -64,7 +67,8 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
     ptr += config->n_positions * config->n_embd;
 
     // layers
-    for (int i = 0; i < config->n_layer; i++) {
+    for (int i = 0; i < config->n_layer; i++)
+    {
         block_t *block = &model->h[i];
 
         // ln_1.w
@@ -75,7 +79,7 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
         block->ln_1.w.shape[3] = 0;
         block->ln_1.w.data = ptr;
         ptr += config->n_embd;
-        
+
         // ln_1.b
         block->ln_1.b.ndim = 1;
         block->ln_1.b.shape[0] = config->n_embd;
@@ -93,7 +97,7 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
         block->attn.qkv_w.shape[3] = 0;
         block->attn.qkv_w.data = ptr;
         ptr += config->n_embd * 3 * config->n_embd;
-        
+
         // attn.qkv_b
         block->attn.qkv_b.ndim = 1;
         block->attn.qkv_b.shape[0] = 3 * config->n_embd;
@@ -102,7 +106,7 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
         block->attn.qkv_b.shape[3] = 0;
         block->attn.qkv_b.data = ptr;
         ptr += 3 * config->n_embd;
-        
+
         // attn.proj_w
         block->attn.proj_w.ndim = 2;
         block->attn.proj_w.shape[0] = config->n_embd;
@@ -111,7 +115,7 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
         block->attn.proj_w.shape[3] = 0;
         block->attn.proj_w.data = ptr;
         ptr += config->n_embd * config->n_embd;
-        
+
         // attn.proj_b
         block->attn.proj_b.ndim = 1;
         block->attn.proj_b.shape[0] = config->n_embd;
@@ -129,7 +133,7 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
         block->ln_2.w.shape[3] = 0;
         block->ln_2.w.data = ptr;
         ptr += config->n_embd;
-        
+
         // ln_2.b
         block->ln_2.b.ndim = 1;
         block->ln_2.b.shape[0] = config->n_embd;
@@ -147,7 +151,7 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
         block->mlp.fc_w.shape[3] = 0;
         block->mlp.fc_w.data = ptr;
         ptr += config->n_embd * 4 * config->n_embd;
-        
+
         // mlp.fc_b
         block->mlp.fc_b.ndim = 1;
         block->mlp.fc_b.shape[0] = 4 * config->n_embd;
@@ -156,7 +160,7 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
         block->mlp.fc_b.shape[3] = 0;
         block->mlp.fc_b.data = ptr;
         ptr += 4 * config->n_embd;
-        
+
         // mlp.proj_w
         block->mlp.proj_w.ndim = 2;
         block->mlp.proj_w.shape[0] = 4 * config->n_embd;
@@ -165,7 +169,7 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
         block->mlp.proj_w.shape[3] = 0;
         block->mlp.proj_w.data = ptr;
         ptr += 4 * config->n_embd * config->n_embd;
-        
+
         // mlp.proj_b
         block->mlp.proj_b.ndim = 1;
         block->mlp.proj_b.shape[0] = config->n_embd;
@@ -184,7 +188,7 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
     model->ln_f.w.shape[3] = 0;
     model->ln_f.w.data = ptr;
     ptr += config->n_embd;
-    
+
     model->ln_f.b.ndim = 1;
     model->ln_f.b.shape[0] = config->n_embd;
     model->ln_f.b.shape[1] = 0;
@@ -199,50 +203,70 @@ int gpt2_initialize(gpt2_t *model, const config_t *config) {
     return 0;
 }
 
-int gpt2_load_weights(gpt2_t *model, FILE *file) {
+int gpt2_load_weights(gpt2_t *model, FILE *file)
+{
     // emb
-    if (tensor_load(&model->emb.wte, file) != 0) return -1;
-    if (tensor_load(&model->emb.wpe, file) != 0) return -1;
+    if (tensor_load(&model->emb.wte, file) != 0)
+        return -1;
+    if (tensor_load(&model->emb.wpe, file) != 0)
+        return -1;
 
     // layers
-    for (int i = 0; i < NUM_LAYERS; i++) {
+    for (int i = 0; i < NUM_LAYERS; i++)
+    {
         block_t *block = &model->h[i];
 
         // ln_1
-        if (tensor_load(&block->ln_1.w, file) != 0) return -1;
-        if (tensor_load(&block->ln_1.b, file) != 0) return -1;
+        if (tensor_load(&block->ln_1.w, file) != 0)
+            return -1;
+        if (tensor_load(&block->ln_1.b, file) != 0)
+            return -1;
 
         // attn
-        if (tensor_load(&block->attn.qkv_w, file) != 0) return -1;
-        if (tensor_load(&block->attn.qkv_b, file) != 0) return -1;
-        if (tensor_load(&block->attn.proj_w, file) != 0) return -1;
-        if (tensor_load(&block->attn.proj_b, file) != 0) return -1;
+        if (tensor_load(&block->attn.qkv_w, file) != 0)
+            return -1;
+        if (tensor_load(&block->attn.qkv_b, file) != 0)
+            return -1;
+        if (tensor_load(&block->attn.proj_w, file) != 0)
+            return -1;
+        if (tensor_load(&block->attn.proj_b, file) != 0)
+            return -1;
 
         // ln_2
-        if (tensor_load(&block->ln_2.w, file) != 0) return -1;
-        if (tensor_load(&block->ln_2.b, file) != 0) return -1;
+        if (tensor_load(&block->ln_2.w, file) != 0)
+            return -1;
+        if (tensor_load(&block->ln_2.b, file) != 0)
+            return -1;
 
         // mlp
-        if (tensor_load(&block->mlp.fc_w, file) != 0) return -1;
-        if (tensor_load(&block->mlp.fc_b, file) != 0) return -1;
-        if (tensor_load(&block->mlp.proj_w, file) != 0) return -1;
-        if (tensor_load(&block->mlp.proj_b, file) != 0) return -1;
+        if (tensor_load(&block->mlp.fc_w, file) != 0)
+            return -1;
+        if (tensor_load(&block->mlp.fc_b, file) != 0)
+            return -1;
+        if (tensor_load(&block->mlp.proj_w, file) != 0)
+            return -1;
+        if (tensor_load(&block->mlp.proj_b, file) != 0)
+            return -1;
     }
 
     // final layer norm
-    if (tensor_load(&model->ln_f.w, file) != 0) return -1;
-    if (tensor_load(&model->ln_f.b, file) != 0) return -1;
+    if (tensor_load(&model->ln_f.w, file) != 0)
+        return -1;
+    if (tensor_load(&model->ln_f.b, file) != 0)
+        return -1;
 
     return 0;
 }
 
-void gpt2_free(gpt2_t *model) {
+void gpt2_free(gpt2_t *model)
+{
     // Free the single contiguous parameter memory block
-    if (model->params_memory) {
+    if (model->params_memory)
+    {
         cudaFree(model->params_memory);
         model->params_memory = NULL;
     }
-    
+
     // No need to free individual tensors since they're now stack-allocated
     // Only the GPU memory was allocated, which is handled by freeing params_memory above
 }

@@ -31,15 +31,17 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort =
 }
 
 // Helper: compute mean loss (used by test main)
-float compute_mean_loss(tensor_t *losses, int B, int S) {
+float compute_mean_loss(tensor_t *losses, int B, int S)
+{
     float *cpu_losses = (float *)malloc(B * S * sizeof(float));
     cudaMemcpy(cpu_losses, losses->data, B * S * sizeof(float), cudaMemcpyDeviceToHost);
-    
+
     float sum = 0.0f;
-    for (int i = 0; i < B * S; i++) {
+    for (int i = 0; i < B * S; i++)
+    {
         sum += cpu_losses[i];
     }
-    
+
     free(cpu_losses);
     return sum / (B * S);
 }
@@ -56,12 +58,13 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
 
     // Calculate total size needed for all activations
     size_t total_size = 0;
-    
+
     // encoded: B * S * h
     total_size += B * S * h;
-    
+
     // Per layer activations
-    for (int i = 0; i < config.n_layer; i++) {
+    for (int i = 0; i < config.n_layer; i++)
+    {
         total_size += B * S * h;          // ln_1
         total_size += B * S;              // ln_1_mean
         total_size += B * S;              // ln_1_rstd
@@ -79,24 +82,25 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         total_size += B * S * h;          // mlp_proj
         total_size += B * S * h;          // res_3
     }
-    
+
     // Final layers
-    total_size += B * S * h;  // ln_f
-    total_size += B * S;      // ln_f_mean
-    total_size += B * S;      // ln_f_rstd
-    total_size += B * S * V;  // logits
-    total_size += B * S * V;  // probs
-    total_size += B * S;      // losses
-    
+    total_size += B * S * h; // ln_f
+    total_size += B * S;     // ln_f_mean
+    total_size += B * S;     // ln_f_rstd
+    total_size += B * S * V; // logits
+    total_size += B * S * V; // probs
+    total_size += B * S;     // losses
+
     // Allocate single contiguous block on GPU
     cudaError_t err = cudaMalloc(&buffers->activations_memory, total_size * sizeof(float));
-    if (err != cudaSuccess) {
+    if (err != cudaSuccess)
+    {
         return -1;
     }
-    
+
     // Now set up tensor structures with pointers into this block
     float *ptr = buffers->activations_memory;
-    
+
     // encoded
     int encoded_shape[3] = {B, S, h};
     buffers->encoded.ndim = 3;
@@ -120,7 +124,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         layer_bufs->ln_1.shape[3] = 0;
         layer_bufs->ln_1.data = ptr;
         ptr += B * S * h;
-        
+
         // ln_1_mean
         layer_bufs->ln_1_mean.ndim = 2;
         layer_bufs->ln_1_mean.shape[0] = B;
@@ -129,7 +133,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         layer_bufs->ln_1_mean.shape[3] = 0;
         layer_bufs->ln_1_mean.data = ptr;
         ptr += B * S;
-        
+
         // ln_1_rstd
         layer_bufs->ln_1_rstd.ndim = 2;
         layer_bufs->ln_1_rstd.shape[0] = B;
@@ -138,7 +142,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         layer_bufs->ln_1_rstd.shape[3] = 0;
         layer_bufs->ln_1_rstd.data = ptr;
         ptr += B * S;
-        
+
         // qkv
         layer_bufs->qkv.ndim = 3;
         layer_bufs->qkv.shape[0] = B;
@@ -147,7 +151,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         layer_bufs->qkv.shape[3] = 0;
         layer_bufs->qkv.data = ptr;
         ptr += B * S * 3 * h;
-        
+
         // atty
         layer_bufs->atty.ndim = 3;
         layer_bufs->atty.shape[0] = B;
@@ -156,7 +160,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         layer_bufs->atty.shape[3] = 0;
         layer_bufs->atty.data = ptr;
         ptr += B * S * h;
-        
+
         // preatt
         layer_bufs->preatt.ndim = 4;
         layer_bufs->preatt.shape[0] = B;
@@ -165,7 +169,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         layer_bufs->preatt.shape[3] = S;
         layer_bufs->preatt.data = ptr;
         ptr += B * n_head * S * S;
-        
+
         // att
         layer_bufs->att.ndim = 4;
         layer_bufs->att.shape[0] = B;
@@ -174,7 +178,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         layer_bufs->att.shape[3] = S;
         layer_bufs->att.data = ptr;
         ptr += B * n_head * S * S;
-        
+
         // att_proj
         layer_bufs->att_proj.ndim = 3;
         layer_bufs->att_proj.shape[0] = B;
@@ -183,7 +187,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         layer_bufs->att_proj.shape[3] = 0;
         layer_bufs->att_proj.data = ptr;
         ptr += B * S * h;
-        
+
         // res_2
         layer_bufs->res_2.ndim = 3;
         layer_bufs->res_2.shape[0] = B;
@@ -192,7 +196,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         layer_bufs->res_2.shape[3] = 0;
         layer_bufs->res_2.data = ptr;
         ptr += B * S * h;
-        
+
         // ln_2
         layer_bufs->ln_2.ndim = 3;
         layer_bufs->ln_2.shape[0] = B;
@@ -201,7 +205,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         layer_bufs->ln_2.shape[3] = 0;
         layer_bufs->ln_2.data = ptr;
         ptr += B * S * h;
-        
+
         // ln_2_mean
         layer_bufs->ln_2_mean.ndim = 2;
         layer_bufs->ln_2_mean.shape[0] = B;
@@ -210,7 +214,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         layer_bufs->ln_2_mean.shape[3] = 0;
         layer_bufs->ln_2_mean.data = ptr;
         ptr += B * S;
-        
+
         // ln_2_rstd
         layer_bufs->ln_2_rstd.ndim = 2;
         layer_bufs->ln_2_rstd.shape[0] = B;
@@ -219,7 +223,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         layer_bufs->ln_2_rstd.shape[3] = 0;
         layer_bufs->ln_2_rstd.data = ptr;
         ptr += B * S;
-        
+
         // mlp_fc
         layer_bufs->mlp_fc.ndim = 3;
         layer_bufs->mlp_fc.shape[0] = B;
@@ -228,7 +232,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         layer_bufs->mlp_fc.shape[3] = 0;
         layer_bufs->mlp_fc.data = ptr;
         ptr += B * S * four_h;
-        
+
         // mlp_fc_gelu
         layer_bufs->mlp_fc_gelu.ndim = 3;
         layer_bufs->mlp_fc_gelu.shape[0] = B;
@@ -237,7 +241,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         layer_bufs->mlp_fc_gelu.shape[3] = 0;
         layer_bufs->mlp_fc_gelu.data = ptr;
         ptr += B * S * four_h;
-        
+
         // mlp_proj
         layer_bufs->mlp_proj.ndim = 3;
         layer_bufs->mlp_proj.shape[0] = B;
@@ -246,7 +250,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
         layer_bufs->mlp_proj.shape[3] = 0;
         layer_bufs->mlp_proj.data = ptr;
         ptr += B * S * h;
-        
+
         // res_3
         layer_bufs->res_3.ndim = 3;
         layer_bufs->res_3.shape[0] = B;
@@ -266,7 +270,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
     buffers->ln_f.shape[3] = 0;
     buffers->ln_f.data = ptr;
     ptr += B * S * h;
-    
+
     // ln_f_mean
     buffers->ln_f_mean.ndim = 2;
     buffers->ln_f_mean.shape[0] = B;
@@ -275,7 +279,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
     buffers->ln_f_mean.shape[3] = 0;
     buffers->ln_f_mean.data = ptr;
     ptr += B * S;
-    
+
     // ln_f_rstd
     buffers->ln_f_rstd.ndim = 2;
     buffers->ln_f_rstd.shape[0] = B;
@@ -284,7 +288,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
     buffers->ln_f_rstd.shape[3] = 0;
     buffers->ln_f_rstd.data = ptr;
     ptr += B * S;
-    
+
     // logits
     buffers->logits.ndim = 3;
     buffers->logits.shape[0] = B;
@@ -293,7 +297,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
     buffers->logits.shape[3] = 0;
     buffers->logits.data = ptr;
     ptr += B * S * V;
-    
+
     // probs
     buffers->probs.ndim = 3;
     buffers->probs.shape[0] = B;
@@ -302,7 +306,7 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
     buffers->probs.shape[3] = 0;
     buffers->probs.data = ptr;
     ptr += B * S * V;
-    
+
     // losses
     buffers->losses.ndim = 2;
     buffers->losses.shape[0] = B;
@@ -318,7 +322,8 @@ int setup_train_buffers(config_t config, train_buffers_t *buffers, int seq_len)
 void free_train_buffers(train_buffers_t *buffers)
 {
     // Free the single contiguous activation memory block
-    if (buffers->activations_memory) {
+    if (buffers->activations_memory)
+    {
         cudaFree(buffers->activations_memory);
         buffers->activations_memory = NULL;
     }
@@ -371,7 +376,8 @@ void forward(config_t config, gpt2_t model, train_buffers_t buffers, const int *
     softmax_forward<<<CEIL_DIV(B * S * V, thr), thr>>>(buffers.probs.data, buffers.logits.data, B, S, V);
 }
 
-void cross_entropy(config_t config, train_buffers_t buffers, const int *d_target_tokens, int seq_len) {
+void cross_entropy(config_t config, train_buffers_t buffers, const int *d_target_tokens, int seq_len)
+{
     int B = config.batch_size;
     int S = seq_len;
     int V = config.vocab_size;
@@ -380,7 +386,8 @@ void cross_entropy(config_t config, train_buffers_t buffers, const int *d_target
     cross_entropy_forward<<<CEIL_DIV(B * S, thr), thr>>>(buffers.losses.data, buffers.probs.data, d_target_tokens, B, S, V);
 }
 
-void backward(config_t config, gpt2_t model, train_buffers_t buffers, gpt2_t g_model, train_buffers_t g_buffers, const int *d_input_tokens, const int *d_target_tokens, int seq_len) {
+void backward(config_t config, gpt2_t model, train_buffers_t buffers, gpt2_t g_model, train_buffers_t g_buffers, const int *d_input_tokens, const int *d_target_tokens, int seq_len)
+{
     int L = config.n_layer;
     int B = config.batch_size;
     int S = seq_len;
@@ -438,18 +445,20 @@ void backward(config_t config, gpt2_t model, train_buffers_t buffers, gpt2_t g_m
     embedding_backward<<<CEIL_DIV(B * S, thr), thr>>>(g_model.emb.wte.data, g_model.emb.wpe.data, g_buffers.encoded.data, d_input_tokens, B, S, h);
 }
 
-void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt) {
-    if (opt->m_memory == NULL) {
+void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt)
+{
+    if (opt->m_memory == NULL)
+    {
         size_t num_params = model->num_parameters;
         gpuErrchk(cudaMalloc(&opt->m_memory, num_params * sizeof(float)));
         gpuErrchk(cudaMalloc(&opt->v_memory, num_params * sizeof(float)));
-        
+
         gpuErrchk(cudaMemset(opt->m_memory, 0, num_params * sizeof(float)));
         gpuErrchk(cudaMemset(opt->v_memory, 0, num_params * sizeof(float)));
     }
-    
+
     opt->t++;
-    
+
     int thr = 1024;
     int num_blocks = CEIL_DIV(model->num_parameters, thr);
 
@@ -464,22 +473,24 @@ void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt) {
         opt->beta2,
         opt->eps,
         opt->weight_decay,
-        opt->t
-    );
-    
+        opt->t);
+
     gpuErrchk(cudaGetLastError());
 }
 
-void gpt2_zero_grad(gpt2_t *grads) {
+void gpt2_zero_grad(gpt2_t *grads)
+{
     cudaMemset(grads->params_memory, 0, grads->num_parameters * sizeof(float));
 }
 
-void zero_activation_grads(config_t config, train_buffers_t *g_buffers) {
+void zero_activation_grads(config_t config, train_buffers_t *g_buffers)
+{
     cudaMemset(g_buffers->encoded.data, 0, tensor_size(g_buffers->encoded) * sizeof(float));
-    
-    for (int i = 0; i < config.n_layer; i++) {
+
+    for (int i = 0; i < config.n_layer; i++)
+    {
         layer_buffers_t *g_layer = &g_buffers->blocks[i];
-        
+
         cudaMemset(g_layer->ln_1.data, 0, tensor_size(g_layer->ln_1) * sizeof(float));
         cudaMemset(g_layer->ln_1_mean.data, 0, tensor_size(g_layer->ln_1_mean) * sizeof(float));
         cudaMemset(g_layer->ln_1_rstd.data, 0, tensor_size(g_layer->ln_1_rstd) * sizeof(float));
@@ -497,7 +508,7 @@ void zero_activation_grads(config_t config, train_buffers_t *g_buffers) {
         cudaMemset(g_layer->mlp_proj.data, 0, tensor_size(g_layer->mlp_proj) * sizeof(float));
         cudaMemset(g_layer->res_3.data, 0, tensor_size(g_layer->res_3) * sizeof(float));
     }
-    
+
     cudaMemset(g_buffers->ln_f.data, 0, tensor_size(g_buffers->ln_f) * sizeof(float));
     cudaMemset(g_buffers->ln_f_mean.data, 0, tensor_size(g_buffers->ln_f_mean) * sizeof(float));
     cudaMemset(g_buffers->ln_f_rstd.data, 0, tensor_size(g_buffers->ln_f_rstd) * sizeof(float));
