@@ -14,6 +14,8 @@
 #include "gpt2/layers/cross_entropy.h"
 #include "gpt2/layers/adamw.h"
 
+#define THREADS 1024
+
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
 
 #define gpuErrchk(ans)                        \
@@ -338,7 +340,7 @@ void forward(config_t config, gpt2_t model, train_buffers_t buffers, const int *
     int n_head = config.n_head;
     int V = config.vocab_size;
 
-    int thr = 1024;
+    int thr = THREADS;
 
     embedding_forward<<<B, thr>>>(buffers.encoded.data, d_input_tokens, model.emb.wte.data, model.emb.wpe.data, S, h, V, config.n_positions);
 
@@ -382,7 +384,7 @@ void cross_entropy(config_t config, train_buffers_t buffers, const int *d_target
     int S = seq_len;
     int V = config.vocab_size;
 
-    int thr = 1024;
+    int thr = THREADS;
     cross_entropy_forward<<<CEIL_DIV(B * S, thr), thr>>>(buffers.losses.data, buffers.probs.data, d_target_tokens, B, S, V);
 }
 
@@ -395,7 +397,7 @@ void backward(config_t config, gpt2_t model, train_buffers_t buffers, gpt2_t g_m
     int n_head = config.n_head;
     int V = config.vocab_size;
 
-    int thr = 1024;
+    int thr = THREADS;
 
     cross_entropy_backward<<<CEIL_DIV(B * S, thr), thr>>>(g_buffers.logits.data, buffers.probs.data, d_target_tokens, B, S, V);
 
@@ -459,7 +461,7 @@ void gpt2_update(gpt2_t *model, gpt2_t *grads, adamw_state_t *opt)
 
     opt->t++;
 
-    int thr = 256;
+    int thr = THREADS;
     int num_blocks = CEIL_DIV(model->num_parameters, thr);
 
     adamw_kernel<<<num_blocks, thr>>>(
