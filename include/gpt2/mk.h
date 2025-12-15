@@ -9,6 +9,7 @@
 #define MAX_INSTR_PER_SM 2000
 #define NUM_SM 28
 
+#define PROFILE
 
 typedef struct
 {

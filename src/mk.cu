@@ -845,6 +845,7 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
         {
             stream_t *st = (stream_t *)malloc(sizeof(stream_t));
             st->n = sm_counts[sm];
+            streams[sm]->n = sm_counts[sm];
             st->instructions = (instruction_t *)malloc(sm_counts[sm] * sizeof(instruction_t));
             host_stream_structs[sm] = st;
         }
@@ -866,6 +867,33 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
     free(all_instructions);
     free(sm_counts);
     free(sm_indices);
+
+    // print all streams for debugging to a file called streams.txt
+    // format is
+    // SM id:
+    // instr 0: op, layer, bar_idx, expected, grid_dim_x, grid_dim_y, num_blocks
+    // instr 1: ...
+    // note that you should replace OP with the actual operation name for better readability
+    FILE *f = fopen("streams.txt", "w");
+    for (int sm = 0; sm < NUM_SM; sm++)
+    {
+        fprintf(f, "SM %d:\n", sm);
+        if (host_stream_structs[sm])
+        {
+            for (int i = 0; i < host_stream_structs[sm]->n; i++)
+            {
+                instruction_t instr = host_stream_structs[sm]->instructions[i];
+                fprintf(f, "  Instr %d: op=%d, layer=%d, bar_idx=%d, expected=%d, start_b_x=%d, end_b_x=%d, inc=%d\n",
+                        i, instr.op, instr.layer, instr.bar_idx, instr.expected,
+                        instr.start_b_x, instr.end_b_x, instr.inc);
+            }
+        }
+        else
+        {
+            fprintf(f, "  (no instructions)\n");
+        }
+    }
+    fclose(f);
 
     // Allocate device memory for streams and instructions
     stream_t **d_streams_ptr;

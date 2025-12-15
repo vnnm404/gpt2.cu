@@ -350,6 +350,7 @@ int main(int argc, char *argv[])
         gpuErrchk(cudaMemcpy(h_bar_exit_time, d_bar_exit_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long), cudaMemcpyDeviceToHost));
         gpuErrchk(cudaMemcpy(h_instr_end_time, d_instr_end_time, NUM_SM * MAX_INSTR_PER_SM * sizeof(long long), cudaMemcpyDeviceToHost));
 
+#ifdef PROFILE
         // Write to timer.txt
         {
             FILE *f = fopen("timer.txt", step == 0 ? "w" : "a");
@@ -359,6 +360,7 @@ int main(int argc, char *argv[])
                 for (int sm = 0; sm < NUM_SM; sm++)
                 {
                     fprintf(f, "SM%d:\n", sm);
+                    // printf("SM%d:INSTR_COUNT=%d\n", sm, h_instr_counts[sm]);
                     for (int i = 0; i < h_instr_counts[sm]; i++)
                     {
                         int idx = sm * MAX_INSTR_PER_SM + i;
@@ -367,6 +369,8 @@ int main(int argc, char *argv[])
                         long long end = h_instr_end_time[idx];
                         long long spin_duration = exit - enter;
                         long long exec_duration = end - exit;
+                        // printf("  instr %d: bar_enter=%lld, bar_exit=%lld, instr_end=%lld, spin_wait=%lld, exec_time=%lld\n",
+                        //    i, enter - min_start, exit - min_start, end - min_start, spin_duration / 1000000, exec_duration / 1000000);
                         fprintf(f, "  instr %d: bar_enter=%lld, bar_exit=%lld, instr_end=%lld, spin_wait=%lld, exec_time=%lld\n",
                                 i, enter - min_start, exit - min_start, end - min_start, spin_duration / 1000000, exec_duration / 1000000);
                     }
@@ -375,6 +379,7 @@ int main(int argc, char *argv[])
                 fclose(f);
             }
         }
+#endif
 
         losses[step] = mean_loss;
     }
