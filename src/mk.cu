@@ -487,7 +487,7 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
         int bar_idx = bar_idx_counter++;
         dim3 grid = MLP_FORWARD_GRID(V, B, S);
         int expected = grid.x * grid.y;
-        int num_blocks = CEIL_DIV(B * S * V, thr);
+        int num_blocks = B * S;
 
         add_instructions_1d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks);
         prev_op = op;
@@ -498,7 +498,7 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
         int op = 15;
         // int bar_idx = 1 + (L * 10) + 2;
         int bar_idx = bar_idx_counter++;
-        int expected = CEIL_DIV(B * S * V, thr);
+        int expected = B * S;
         int num_blocks = CEIL_DIV(B * S, thr);
 
         add_instructions_1d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks);

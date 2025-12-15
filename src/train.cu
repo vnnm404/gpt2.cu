@@ -375,7 +375,7 @@ void forward(config_t config, gpt2_t model, train_buffers_t buffers, const int *
 
     mlp_forward<TILE_SIZE><<<MLP_FORWARD_GRID(V, B, S), MLP_BLOCK_DIM, MLP_SHARED_MEM_SIZE>>>(buffers.logits.data, buffers.ln_f.data, model.emb.wte.data, NULL, B, S, h, V);
 
-    softmax_forward<<<CEIL_DIV(B * S * V, thr), thr>>>(buffers.probs.data, buffers.logits.data, B, S, V);
+    softmax_forward<<<B * S, thr>>>(buffers.probs.data, buffers.logits.data, B, S, V);
 }
 
 void cross_entropy(config_t config, train_buffers_t buffers, const int *d_target_tokens, int seq_len)

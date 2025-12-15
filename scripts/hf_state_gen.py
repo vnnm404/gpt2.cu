@@ -4,7 +4,7 @@ from transformers import GPT2LMHeadModel, GPT2TokenizerFast, GPT2Config
 from llm import GPT, GPTConfig
 # ---------------- Config ----------------
 OUT_FILE = "../models/gpt2_multibatch_state.bin"
-BATCH_SIZE = 8
+BATCH_SIZE = 4
 SEQ_LEN = 64
 LR = 1e-4
 
