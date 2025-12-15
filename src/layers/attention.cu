@@ -55,8 +55,8 @@ __device__ void attention_forward_device(float *out, float *preatt, float *att,
     int hs = C / NH; // head size
     float scale = 1.0f / sqrtf((float)hs);
 
-    int tid = threadIdx.x + threadIdx.y * blockDim.x;
-    int num_threads = blockDim.x * blockDim.y;
+    int tid = threadIdx.x;
+    int num_threads = blockDim.x;
 
     // Shared memory layout:
     // s_query[hs]: query vector for this position
@@ -236,8 +236,8 @@ __device__ void attention_backward_device(float *g_inp, float *g_preatt, float *
     int C3 = C * 3;
     float scale = 1.0f / sqrtf((float)hs);
 
-    int tid = threadIdx.x + threadIdx.y * blockDim.x;
-    int num_threads = blockDim.x * blockDim.y;
+    int tid = threadIdx.x;
+    int num_threads = blockDim.x;
 
     // Shared memory layout:
     // s_att[T]: attention weights for this query
