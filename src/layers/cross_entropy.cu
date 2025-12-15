@@ -43,7 +43,7 @@ __global__ void cross_entropy_forward(float *losses, const float *probs, const i
 // Device function for cross entropy backward pass - Megakernel compatible
 __device__ void cross_entropy_backward_device(float *g_logits, float *probs, const int *targets, int batch_size, int seq_len, int vocab_size,
                                               int blockIdx_x) {
-    int idx = blockIdx_x * blockDim.x + threadIdx.x;
+    int idx = blockIdx_x; // * blockDim.x + threadIdx.x;
     int total_elements = batch_size * seq_len;
 
     if (idx < total_elements) {
@@ -59,7 +59,7 @@ __device__ void cross_entropy_backward_device(float *g_logits, float *probs, con
         int target_token = targets[batch_idx * seq_len + t];
 
         // Compute gradient for all vocab positions
-        for (int i = 0; i < vocab_size; i++) {
+        for (int i = threadIdx.x; i < vocab_size; i+=blockDim.x) {
             float p = probs_bt[i];
             float indicator = (i == target_token) ? 1.0f : 0.0f;
             dlogits_bt[i] += (p - indicator) * dloss;
@@ -68,7 +68,7 @@ __device__ void cross_entropy_backward_device(float *g_logits, float *probs, con
 }
 
 __global__ void cross_entropy_backward(float *g_logits, float *probs, const int *targets, int batch_size, int seq_len, int vocab_size) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int idx = blockIdx.x; // * blockDim.x + threadIdx.x;
     int total_elements = batch_size * seq_len;
 
     if (idx < total_elements) {
@@ -84,7 +84,7 @@ __global__ void cross_entropy_backward(float *g_logits, float *probs, const int 
         int target_token = targets[batch_idx * seq_len + t];
 
         // Compute gradient for all vocab positions
-        for (int i = 0; i < vocab_size; i++) {
+        for (int i = threadIdx.x; i < vocab_size; i+=blockDim.x) {
             float p = probs_bt[i];
             float indicator = (i == target_token) ? 1.0f : 0.0f;
             dlogits_bt[i] += (p - indicator) * dloss;
