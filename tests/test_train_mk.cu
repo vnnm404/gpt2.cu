@@ -289,7 +289,7 @@ int main(int argc, char *argv[])
         // backward(config, model, buffers, g_model, g_buffers, d_input_tokens, d_target_tokens, T);
         // gpt2_update(&model, &g_model, &opt_state);
 
-        megakernel<<<NUM_SM, threads_per_block, shared_mem_size>>>(
+        megakernel<<<NUM_SM, 256, shared_mem_size>>>(
             model.params_memory,
             g_model.params_memory,
             buffers.activations_memory,
@@ -336,6 +336,7 @@ int main(int argc, char *argv[])
                 min_start = h_sm_start_times[sm];
             }
         }
+        // printf("Clock speed: %d\n", G_TIMER_FREQ_HZ);
 
         // printf("SM Timing (step %d):\n", step);
         // for (int sm = 0; sm < NUM_SM; sm++) {
@@ -356,10 +357,10 @@ int main(int argc, char *argv[])
             FILE *f = fopen("timer.txt", step == 0 ? "w" : "a");
             if (f)
             {
-                fprintf(f, "=== Step %d ===\n", step);
+                // fprintf(f, "=== Step %d ===\n", step);
                 for (int sm = 0; sm < NUM_SM; sm++)
                 {
-                    fprintf(f, "SM%d:\n", sm);
+                    // fprintf(f, "SM%d:\n", sm);
                     // printf("SM%d:INSTR_COUNT=%d\n", sm, h_instr_counts[sm]);
                     for (int i = 0; i < h_instr_counts[sm]; i++)
                     {
@@ -371,11 +372,11 @@ int main(int argc, char *argv[])
                         long long exec_duration = end - exit;
                         // printf("  instr %d: bar_enter=%lld, bar_exit=%lld, instr_end=%lld, spin_wait=%lld, exec_time=%lld\n",
                         //    i, enter - min_start, exit - min_start, end - min_start, spin_duration / 1000000, exec_duration / 1000000);
-                        fprintf(f, "  instr %d: bar_enter=%lld, bar_exit=%lld, instr_end=%lld, spin_wait=%lld, exec_time=%lld\n",
-                                i, enter - min_start, exit - min_start, end - min_start, spin_duration / 1000000, exec_duration / 1000000);
+                        fprintf(f, "step=%d,sm=%d,instr=%d,bar_enter=%lld,bar_exit=%lld,instr_end=%lld,spin_wait=%lld,exec_time=%lld\n",
+                                step, sm, i, enter - min_start, exit - min_start, end - min_start, spin_duration / 1000000, exec_duration / 1000000);
                     }
                 }
-                fprintf(f, "\n");
+                // fprintf(f, "\n");
                 fclose(f);
             }
         }
@@ -383,6 +384,7 @@ int main(int argc, char *argv[])
 
         losses[step] = mean_loss;
     }
+    printf("attn smem %d\n", ATTN_FWD_SMEM(64, 768 / 12));
 
     // Check expected losses
     float expected_losses[10] = {

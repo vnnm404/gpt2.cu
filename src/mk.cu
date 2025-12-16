@@ -514,7 +514,7 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
         // int bar_idx = 1 + (L * 10) + 3;
         int bar_idx = bar_idx_counter++;
         int expected = CEIL_DIV(B * S, thr);
-        int num_blocks = CEIL_DIV(B * S, thr);
+        int num_blocks = B * S;
 
         add_instructions_1d(all_instructions, &instruction_count, op, prev_op, -1, bar_idx, expected, num_blocks);
         prev_op = op;
@@ -525,7 +525,7 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
         int op = 17;
         // int bar_idx = 1 + (L * 10) + 3 + 1;
         int bar_idx = bar_idx_counter++;
-        int expected = CEIL_DIV(B * S, thr);
+        int expected = B * S;
         dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
         int num_blocks_x = grid.x;
         int num_blocks_y = grid.y;
@@ -582,7 +582,7 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
             int op = 21;
             // int bar_idx = 1 + (L * 10) + 3 + 5 + ((L - 1 - layer_idx) * 14);
             int bar_idx = bar_idx_counter++;
-            int expected = CEIL_DIV(B * S * h, thr);
+            int expected = CEIL_DIV(B * S * h, thr) ;
             dim3 grid = MLP_BACKWARD_INPUT_GRID(h * 4, B, S);
             int num_blocks_x = grid.x;
             int num_blocks_y = grid.y;
@@ -829,10 +829,15 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
 
     // Distribute instructions to SMs in round-robin fashion
     int *sm_counts = (int *)calloc(NUM_SM, sizeof(int));
-
+    int sm = 0;
     for (int i = 0; i < instruction_count; i++)
     {
-        int sm_id = i % NUM_SM;
+        if(i > 0 && all_instructions[i].op != all_instructions[i-1].op){
+            sm+=1;
+        }
+        int sm_id = sm % NUM_SM;
+        sm += 1;
+        
         sm_counts[sm_id]++;
     }
 
@@ -856,9 +861,19 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
     }
 
     int *sm_indices = (int *)calloc(NUM_SM, sizeof(int));
+    sm = 0;
     for (int i = 0; i < instruction_count; i++)
     {
-        int sm_id = i % NUM_SM;
+        if(i > 0 && all_instructions[i].op != all_instructions[i-1].op){
+            sm+=1;
+        }
+        int sm_id = sm % NUM_SM;
+        if(sm < 100){
+            printf("%d\n", sm % 28);
+        }
+        sm += 1;
+        
+        
         instruction_t instr = all_instructions[i];
         instr.instr_idx = sm_indices[sm_id];
         host_stream_structs[sm_id]->instructions[sm_indices[sm_id]++] = instr;
@@ -877,14 +892,14 @@ stream_t **schedule_instructions(config_t config, stream_t **streams, int seq_le
     FILE *f = fopen("streams.txt", "w");
     for (int sm = 0; sm < NUM_SM; sm++)
     {
-        fprintf(f, "SM %d:\n", sm);
+        // fprintf(f, "SM %d:\n", sm);
         if (host_stream_structs[sm])
         {
             for (int i = 0; i < host_stream_structs[sm]->n; i++)
             {
                 instruction_t instr = host_stream_structs[sm]->instructions[i];
-                fprintf(f, "  Instr %d: op=%d, layer=%d, bar_idx=%d, expected=%d, start_b_x=%d, end_b_x=%d, inc=%d\n",
-                        i, instr.op, instr.layer, instr.bar_idx, instr.expected,
+                fprintf(f, "sm=%d,instr=%d,op=%d,layer=%d,bar_idx=%d,expected=%d,start_b_x=%d,end_b_x=%d,inc=%d\n",
+                        sm, i, instr.op, instr.layer, instr.bar_idx, instr.expected,
                         instr.start_b_x, instr.end_b_x, instr.inc);
             }
         }
@@ -1112,6 +1127,7 @@ __device__ void execute_instruction(
             while (vbar[instr.bar_idx] < exp)
             {
             }
+            // vbar[(instr.bar_idx + 1)] = 0;
         }
 
 #ifdef PROFILE
@@ -1180,12 +1196,27 @@ __device__ void execute_instruction(
         // OP 4: Attention (2D grid: blockIdx_x = b*NH+h, blockIdx_y = t)
         dim3 grid = ATTN_FWD_GRID(B, S, n_head);
         int num_blocks_x = grid.x;
+        int num_instructions = 28;
+        int total_blocks = grid.x * grid.y;
+        int blocks_per_instruction_low = (total_blocks) / num_instructions;
         int start_linear = start_b_y * num_blocks_x + start_b_x;
         int end_linear = end_b_y * num_blocks_x + end_b_x;
         for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++)
         {
-            int b_y = linear_idx / num_blocks_x;
-            int b_x = linear_idx % num_blocks_x;
+            
+
+            int i = linear_idx - start_linear;
+            int j = 0;
+            if(linear_idx < (total_blocks % num_instructions) * (blocks_per_instruction_low + 1)){
+                j = linear_idx / (blocks_per_instruction_low + 1);
+            } else {
+                j = total_blocks % num_instructions + (linear_idx - (total_blocks % num_instructions) * (blocks_per_instruction_low + 1)) / blocks_per_instruction_low;
+            }
+
+            int l = i * num_instructions + j;
+
+            int b_y = l / num_blocks_x;
+            int b_x = l % num_blocks_x;
             attention_forward_device(MK_ACT_ATTY(acts, instr.layer), MK_ACT_PREATT(acts, instr.layer), MK_ACT_ATT(acts, instr.layer), MK_ACT_QKV(acts, instr.layer), B, S, n_head, h, b_x, b_y);
         }
         break;
@@ -1247,10 +1278,54 @@ __device__ void execute_instruction(
     case 9:
     {
         // OP 9: GELU
-        for (int b_x = start_b_x; b_x <= end_b_x; b_x++)
+        // if(threadIdx.x == 0){
+        //         printf("%d %d\n", start_b_x, end_b_x);
+        //     }
+        #pragma unroll
+        for (int b_x = start_b_x; b_x <= end_b_x; b_x+=4)
         {
-            gelu_forward_device(MK_ACT_MLP_FC_GELU(acts, instr.layer), MK_ACT_MLP_FC(acts, instr.layer), B, S, h * 4, b_x);
+            int i = b_x - start_b_x;
+            // int j = 0;
+            // if(b_x <= 2109){
+            //     j = b_x / 110;
+            // } else {
+            //     j = 20 + (b_x - 2200) / 109;
+            // }
+            int j = (b_x <= 2109) ? b_x / 110 :(20 + (b_x - 2200) / 109);
+            
+            
+            // gelu_forward_device_1(MK_ACT_MLP_FC_GELU(acts, instr.layer) + b_x * blockDim.x, MK_ACT_MLP_FC(acts, instr.layer) +  b_x * blockDim.x, B, S, h * 4, b_x);
+            // gelu_forward_device_1(MK_ACT_MLP_FC_GELU(acts, instr.layer) + (b_x + 1) * blockDim.x, MK_ACT_MLP_FC(acts, instr.layer) +  (b_x + 1) * blockDim.x, B, S, h * 4, b_x);
+            // gelu_forward_device_1(MK_ACT_MLP_FC_GELU(acts, instr.layer) + (b_x + 2) * blockDim.x, MK_ACT_MLP_FC(acts, instr.layer) +  (b_x + 2) * blockDim.x, B, S, h * 4, b_x);
+            // gelu_forward_device_1(MK_ACT_MLP_FC_GELU(acts, instr.layer) + (b_x + 3) * blockDim.x, MK_ACT_MLP_FC(acts, instr.layer) +  (b_x + 3) * blockDim.x, B, S, h * 4, b_x);
+        // for(int blockIdx_x = 0; blockIdx_x <= 108; blockIdx_x++){
+            int idx = b_x * blockDim.x + threadIdx.x;
+            int idx1 = (b_x + 1) * blockDim.x + threadIdx.x;
+            int idx2 = (b_x + 2) * blockDim.x + threadIdx.x;
+            int idx3 = (b_x + 3) * blockDim.x + threadIdx.x;
+            // int total_threads = B * seq_len * h*4;
+            // acts[0] = idx;
+            // if (idx >= total_threads) return;
+
+            float x = MK_ACT_MLP_FC(acts, instr.layer)[idx];
+            float x1 = MK_ACT_MLP_FC(acts, instr.layer)[idx1];
+            float x2 = MK_ACT_MLP_FC(acts, instr.layer)[idx2];
+            float x3 = MK_ACT_MLP_FC(acts, instr.layer)[idx3];
+            float cube = 0.044715f * x * x * x;
+            float cube1 = 0.044715f * x1 * x1 * x1;
+            float cube2 = 0.044715f * x2 * x2 * x2;
+            float cube3 = 0.044715f * x3 * x3 * x3;
+            MK_ACT_MLP_FC_GELU(acts, instr.layer)[idx] = 0.5f * x * (1.0f + tanhf(sqrtf(2.0f / M_PI) * (x + cube)));
+            MK_ACT_MLP_FC_GELU(acts, instr.layer)[idx1] = 0.5f * x1 * (1.0f + tanhf(sqrtf(2.0f / M_PI) * (x1 + cube1)));
+            MK_ACT_MLP_FC_GELU(acts, instr.layer)[idx2] = 0.5f * x2 * (1.0f + tanhf(sqrtf(2.0f / M_PI) * (x2 + cube2)));
+            MK_ACT_MLP_FC_GELU(acts, instr.layer)[idx3] = 0.5f * x3 * (1.0f + tanhf(sqrtf(2.0f / M_PI) * (x3 + cube3)));
+        // }
+        
+            // if(end_b_x - start_b_x == 109){
+        //     gelu_forward_device_1(MK_ACT_MLP_FC_GELU(acts, instr.layer), MK_ACT_MLP_FC(acts, instr.layer), B, S, h * 4, end_b_x);
+
         }
+            // }
         break;
     }
 
@@ -1339,16 +1414,28 @@ __device__ void execute_instruction(
     case 17:
     {
         // OP 17: Logits backward (input gradient)
-        dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
-        int num_blocks_x = grid.x;
-        int start_linear = start_b_y * num_blocks_x + start_b_x;
-        int end_linear = end_b_y * num_blocks_x + end_b_x;
-        for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++)
-        {
-            int b_y = linear_idx / num_blocks_x;
-            int b_x = linear_idx % num_blocks_x;
-            mlp_backward_input_device<TILE_SIZE>(MK_ACT_LN_F(grad_acts), MK_ACT_LOGITS(grad_acts), MK_WTE(params), B, S, h, V, b_x, b_y, shared_mem);
-        }
+        // if(start_b_y == end_b_y){
+        //     for (int linear_idx = start_b_x; linear_idx <= end_b_x; linear_idx++)
+        //     {
+        //         mlp_backward_input_device<TILE_SIZE>(MK_ACT_LN_F(grad_acts), MK_ACT_LOGITS(grad_acts), MK_WTE(params), B, S, h, V, linear_idx, start_b_y, shared_mem);
+        //         // grad_acts[0] += b_y + b_x;
+        //     }
+        // } else {
+            dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
+            int num_blocks_x = grid.x;
+            
+            int start_linear = start_b_y * num_blocks_x + start_b_x;
+            int end_linear = end_b_y * num_blocks_x + end_b_x;
+            
+            for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++)
+            {
+                int b_y = linear_idx / num_blocks_x;
+                int b_x = linear_idx % num_blocks_x;
+                mlp_backward_input_device<TILE_SIZE>(MK_ACT_LN_F(grad_acts), MK_ACT_LOGITS(grad_acts), MK_WTE(params), B, S, h, V, b_x, b_y, shared_mem);
+                // grad_acts[0] += b_y + b_x;
+            }
+        // }
+        
         break;
     }
 
@@ -1395,12 +1482,51 @@ __device__ void execute_instruction(
         int num_blocks_x = grid.x;
         int start_linear = start_b_y * num_blocks_x + start_b_x;
         int end_linear = end_b_y * num_blocks_x + end_b_x;
+        int count = 0;
         for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++)
         {
             int b_y = linear_idx / num_blocks_x;
             int b_x = linear_idx % num_blocks_x;
+            // grad_acts[0] += b_x + b_y;
+            // count++;
+            // if(threadIdx.x == 32 && blockIdx.x == 2)
+            // printf("lin: %d %d\n", b_y, b_x);
             mlp_backward_input_device<TILE_SIZE>(MK_ACT_MLP_FC_GELU(grad_acts, instr.layer), MK_ACT_MLP_PROJ(grad_acts, instr.layer), MK_MLP_PROJ_W(params, instr.layer), B, S, h * 4, h, b_x, b_y, shared_mem);
         }
+        // if(start_b_y == end_b_y){
+
+        //     for(int b_x = start_b_x; b_x < end_b_x; b_x++){
+        //         mlp_backward_input_device<TILE_SIZE>(MK_ACT_MLP_FC_GELU(grad_acts, instr.layer), MK_ACT_MLP_PROJ(grad_acts, instr.layer), MK_MLP_PROJ_W(params, instr.layer), B, S, h * 4, h, b_x, , shared_mem);
+        //     }
+            
+        // } else {
+        //     for(int b_x = start_b_x; b_x < end_b_x + ; b_x++){
+        //         mlp_backward_input_device<TILE_SIZE>(MK_ACT_MLP_FC_GELU(grad_acts, instr.layer), MK_ACT_MLP_PROJ(grad_acts, instr.layer), MK_MLP_PROJ_W(params, instr.layer), B, S, h * 4, h, b_x, , shared_mem);
+        //     }
+        // }
+
+        // for(int b_y = start_b_y; b_y <= end_b_y; b_y++){
+        //     int bs = 0;
+        //     int be = num_blocks_x;
+        //     if(b_y == start_b_y){
+        //         bs = start_b_x;
+        //     }
+
+        //     if(b_y == end_b_y)
+        //         be = end_b_x;
+        //     for (int b_x = bs; b_x <= be; b_x++){
+        //         // count--;
+        //     // if(threadIdx.x == 32 && blockIdx.x == 2)
+        //     // printf("dob: %d %d\n", b_y, b_x);
+
+        //         mlp_backward_input_device<TILE_SIZE>(MK_ACT_MLP_FC_GELU(grad_acts, instr.layer), MK_ACT_MLP_PROJ(grad_acts, instr.layer), MK_MLP_PROJ_W(params, instr.layer), B, S, h * 4, h, b_x, b_y, shared_mem);
+        //     }
+        //     // int b_y = linear_idx / num_blocks_x;
+        //     // int b_x = linear_idx % num_blocks_x;
+        // }
+        // if(count != 0){
+        //     printf("%d %d %d\n", threadIdx.x, blockIdx.x, count);
+        // }
         break;
     }
 
@@ -1435,12 +1561,28 @@ __device__ void execute_instruction(
         // OP 24: MLP FC backward input
         dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
         int num_blocks_x = grid.x;
+        int num_instructions = 28;
+        int total_blocks = grid.x * grid.y;
+        int blocks_per_instruction_low = (total_blocks) / num_instructions;
         int start_linear = start_b_y * num_blocks_x + start_b_x;
         int end_linear = end_b_y * num_blocks_x + end_b_x;
         for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++)
         {
-            int b_y = linear_idx / num_blocks_x;
-            int b_x = linear_idx % num_blocks_x;
+            
+
+            int i = linear_idx - start_linear;
+            int j = 0;
+            if(linear_idx < (total_blocks % num_instructions) * (blocks_per_instruction_low + 1)){
+                j = linear_idx / (blocks_per_instruction_low + 1);
+            } else {
+                j = total_blocks % num_instructions + (linear_idx - (total_blocks % num_instructions) * (blocks_per_instruction_low + 1)) / blocks_per_instruction_low;
+            }
+
+            int l = i * num_instructions + j;
+
+            int b_y = l / num_blocks_x;
+            int b_x = l % num_blocks_x;
+
             mlp_backward_input_device<TILE_SIZE>(MK_ACT_LN2(grad_acts, instr.layer), MK_ACT_MLP_FC(grad_acts, instr.layer), MK_MLP_FC_W(params, instr.layer), B, S, h, h * 4, b_x, b_y, shared_mem);
         }
         break;
@@ -1451,12 +1593,28 @@ __device__ void execute_instruction(
         // OP 25: MLP FC backward weight
         dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h * 4, h);
         int num_blocks_x = grid.x;
+        int num_instructions = 28;
+        int total_blocks = grid.x * grid.y;
+        int blocks_per_instruction_low = (total_blocks) / num_instructions;
         int start_linear = start_b_y * num_blocks_x + start_b_x;
         int end_linear = end_b_y * num_blocks_x + end_b_x;
         for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++)
         {
-            int b_y = linear_idx / num_blocks_x;
-            int b_x = linear_idx % num_blocks_x;
+            
+
+            int i = linear_idx - start_linear;
+            int j = 0;
+            if(linear_idx < (total_blocks % num_instructions) * (blocks_per_instruction_low + 1)){
+                j = linear_idx / (blocks_per_instruction_low + 1);
+            } else {
+                j = total_blocks % num_instructions + (linear_idx - (total_blocks % num_instructions) * (blocks_per_instruction_low + 1)) / blocks_per_instruction_low;
+            }
+
+            int l = i * num_instructions + j;
+
+            int b_y = l / num_blocks_x;
+            int b_x = l % num_blocks_x;
+
             mlp_backward_weight_device<TILE_SIZE>(MK_MLP_FC_W(grads, instr.layer), MK_MLP_FC_B(grads, instr.layer), MK_ACT_MLP_FC(grad_acts, instr.layer), MK_ACT_LN2(acts, instr.layer), B, S, h, h * 4, b_x, b_y, shared_mem);
         }
         break;
@@ -1488,12 +1646,28 @@ __device__ void execute_instruction(
         // OP 28: Attention projection backward input
         dim3 grid = MLP_BACKWARD_INPUT_GRID(h, B, S);
         int num_blocks_x = grid.x;
+        int num_instructions = 28;
+        int total_blocks = grid.x * grid.y;
+        int blocks_per_instruction_low = (total_blocks) / num_instructions;
         int start_linear = start_b_y * num_blocks_x + start_b_x;
         int end_linear = end_b_y * num_blocks_x + end_b_x;
         for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++)
         {
-            int b_y = linear_idx / num_blocks_x;
-            int b_x = linear_idx % num_blocks_x;
+            
+
+            int i = linear_idx - start_linear;
+            int j = 0;
+            if(linear_idx < (total_blocks % num_instructions) * (blocks_per_instruction_low + 1)){
+                j = linear_idx / (blocks_per_instruction_low + 1);
+            } else {
+                j = total_blocks % num_instructions + (linear_idx - (total_blocks % num_instructions) * (blocks_per_instruction_low + 1)) / blocks_per_instruction_low;
+            }
+
+            int l = i * num_instructions + j;
+
+            int b_y = l / num_blocks_x;
+            int b_x = l % num_blocks_x;
+
             mlp_backward_input_device<TILE_SIZE>(MK_ACT_ATTY(grad_acts, instr.layer), MK_ACT_ATT_PROJ(grad_acts, instr.layer), MK_ATTN_PROJ_W(params, instr.layer), B, S, h, h, b_x, b_y, shared_mem);
         }
         break;
@@ -1504,12 +1678,29 @@ __device__ void execute_instruction(
         // OP 29: Attention projection backward weight
         dim3 grid = MLP_BACKWARD_WEIGHT_GRID(h, h);
         int num_blocks_x = grid.x;
+        int num_instructions = 28;
+        int total_blocks = grid.x * grid.y;
+        int blocks_per_instruction_low = (total_blocks) / num_instructions;
         int start_linear = start_b_y * num_blocks_x + start_b_x;
         int end_linear = end_b_y * num_blocks_x + end_b_x;
         for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++)
         {
-            int b_y = linear_idx / num_blocks_x;
-            int b_x = linear_idx % num_blocks_x;
+            
+
+            int i = linear_idx - start_linear;
+            int j = 0;
+            if(linear_idx < (total_blocks % num_instructions) * (blocks_per_instruction_low + 1)){
+                j = linear_idx / (blocks_per_instruction_low + 1);
+            } else {
+                j = total_blocks % num_instructions + (linear_idx - (total_blocks % num_instructions) * (blocks_per_instruction_low + 1)) / blocks_per_instruction_low;
+            }
+
+            int l = i * num_instructions + j;
+
+            int b_y = l / num_blocks_x;
+            int b_x = l % num_blocks_x;
+
+            
             mlp_backward_weight_device<TILE_SIZE>(MK_ATTN_PROJ_W(grads, instr.layer), MK_ATTN_PROJ_B(grads, instr.layer), MK_ACT_ATT_PROJ(grad_acts, instr.layer), MK_ACT_ATTY(acts, instr.layer), B, S, h, h, b_x, b_y, shared_mem);
         }
         break;
@@ -1520,12 +1711,29 @@ __device__ void execute_instruction(
         // OP 30: Attention backward (2D grid: blockIdx_x = b*NH+h, blockIdx_y = t2)
         dim3 grid = ATTN_BWD_GRID(B, S, n_head);
         int num_blocks_x = grid.x;
+        int num_instructions = 28;
+        int total_blocks = grid.x * grid.y;
+        int blocks_per_instruction_low = (total_blocks) / num_instructions;
         int start_linear = start_b_y * num_blocks_x + start_b_x;
         int end_linear = end_b_y * num_blocks_x + end_b_x;
         for (int linear_idx = start_linear; linear_idx <= end_linear; linear_idx++)
         {
-            int b_y = linear_idx / num_blocks_x;
-            int b_x = linear_idx % num_blocks_x;
+            
+
+            int i = linear_idx - start_linear;
+            int j = 0;
+            if(linear_idx < (total_blocks % num_instructions) * (blocks_per_instruction_low + 1)){
+                j = linear_idx / (blocks_per_instruction_low + 1);
+            } else {
+                j = total_blocks % num_instructions + (linear_idx - (total_blocks % num_instructions) * (blocks_per_instruction_low + 1)) / blocks_per_instruction_low;
+            }
+
+            int l = i * num_instructions + j;
+
+            int b_y = l / num_blocks_x;
+            int b_x = l % num_blocks_x;
+
+
             attention_backward_device(MK_ACT_QKV(grad_acts, instr.layer), MK_ACT_PREATT(grad_acts, instr.layer), MK_ACT_ATT(grad_acts, instr.layer), MK_ACT_ATTY(grad_acts, instr.layer), MK_ACT_QKV(acts, instr.layer), MK_ACT_ATT(acts, instr.layer), B, S, h, n_head, b_x, b_y);
         }
         break;
@@ -1612,6 +1820,6 @@ __device__ void execute_instruction(
 
     if (instr.inc && threadIdx.x == 0)
     {
-        atomicAdd(&bar[instr.bar_idx + 1], 1);
+        atomicAdd(&bar[(instr.bar_idx + 1)], 1);
     }
 }
