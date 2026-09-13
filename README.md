@@ -1,4 +1,25 @@
-# gpt2.cu
+# gpt2.cu: Megakernels for Model Training
+
+**Can an entire GPT-2 training step run inside a single GPU kernel?**
+
+We extend the megakernel execution model from inference to training, executing
+GPT-2's forward pass, backward pass, and AdamW update inside one persistent
+CUDA kernel.
+
+The implementation contains 35 custom operations and an interpreter-style
+device scheduler that explicitly manages dependencies, synchronization, and
+work distribution across SMs.
+
+Unlike conventional training, where kernel boundaries provide global
+synchronization implicitly, the megakernel must implement those dependencies
+explicitly on the GPU.
+
+### Highlights
+
+- Full GPT-2 forward + backward + optimizer step in one persistent kernel
+- 35 CUDA operations covering attention, MLPs, LayerNorm, embeddings, and AdamW
+- Explicit device-side scheduling and synchronization instead of host-driven kernel launches
+- Correctness validated against PyTorch and by fine-tuning on Tiny Shakespeare
 
 ## Setup
 
