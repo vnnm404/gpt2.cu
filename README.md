@@ -84,6 +84,7 @@ width is 64 and sequence lengths are bounded at 256; performance is tuned and
 reported for batches 32, 64, and 128 at sequence 128, GPT-2 124M. The results do not establish parity
 with `torch.compile`, CUDA Graphs, mixed-precision training, or other GPUs/shapes.
 
-The original `src/mk.cu`, `src/train.cu`, layer code, and `tests/test_train*.cu`
-remain available for historical comparison with `GPT2_BUILD_LEGACY=ON`. They are
-not the default executor and retain their original assumptions and data formats.
+The superseded executor, binary-format drivers, and timer tools have been
+removed. Their historical versions remain in Git at `b6300cb`. Current validation
+lives in `benchmarks/`; standalone execution uses the same kernels as the
+persistent executor.

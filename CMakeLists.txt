@@ -35,10 +35,3 @@ target_compile_options(gpt2_executor PRIVATE
 set_target_properties(gpt2_executor PROPERTIES
   CUDA_SEPARABLE_COMPILATION OFF
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
-
-option(GPT2_BUILD_LEGACY "Build the original experimental library and drivers" OFF)
-if(GPT2_BUILD_LEGACY)
-  include_directories(include third_party)
-  add_subdirectory(src)
-  add_subdirectory(tests)
-endif()
