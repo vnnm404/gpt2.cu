@@ -2,6 +2,8 @@
 #include "gpt2/kernels/gemm.cuh"
 #include "gpt2/kernels/elementwise.cuh"
 #include "gpt2/kernels/attention.cuh"
+#include "gpt2/kernels/page_pipeline.cuh"
+#include "gpt2/kernels/tile_schedule.cuh"
 
 namespace gpt2 {
 __device__ __forceinline__ void execute(const Operation &o, int tile, float *s) {
@@ -13,6 +15,7 @@ __device__ __forceinline__ void execute(const Operation &o, int tile, float *s) 
             case 3: gemm<true, true>(o, tile, s); break;
         }
     } else switch (o.code) {
+        case Code::page_norm: page_norm(o, tile, s); break;
         case Code::adamw: adamw(o, tile); break;
         case Code::norm: norm(o, tile, s); break;
         case Code::norm_backward: norm_backward(o, tile, s); break;
@@ -34,6 +37,12 @@ __global__ __launch_bounds__(256, 2) void persistent(const Operation *ops, int c
     extern __shared__ float scratch[];
     auto grid = cooperative_groups::this_grid();
     for (int i = 0; i < count;) {
+        if (ops[i].code == Code::tile_graph) {
+            tile_graph(ops[i], scratch);
+            grid.sync();
+            ++i;
+            continue;
+        }
         int end = min(count, i + max(1, ops[i].group));
         int tiles = 0;
         for (int j = i; j < end; ++j) tiles += ops[j].tiles;
@@ -87,6 +96,7 @@ extern "C" int gpt2_launch(const gpt2::Operation *device_ops, int count,
 
 extern "C" int gpt2_operation(const gpt2::Operation *host_op, cudaStream_t stream) {
     if (host_op->tiles < 1) return cudaErrorInvalidValue;
+    if (host_op->code == gpt2::Code::tile_graph) return cudaErrorNotSupported;
     gpt2::standalone<<<host_op->tiles, gpt2::threads, gpt2::shared_bytes, stream>>>(*host_op);
     return cudaGetLastError();
 }

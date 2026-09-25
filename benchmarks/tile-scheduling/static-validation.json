@@ -1,0 +1,87 @@
+{
+  "source_sha256": "ffa9c785413e720d4caa0a3768c8a2d7d78a3d7b7168119faf71319de0708f31",
+  "gpu": "NVIDIA GeForce RTX 3080",
+  "torch": "2.5.1+cu124",
+  "cuda_version": "12.4",
+  "tf32": false,
+  "dtype": "float32",
+  "layers": 12,
+  "cuda_gemm": "cutlass_simt_fp32",
+  "grouped": true,
+  "operations": 458,
+  "stages": 213,
+  "batch": 8,
+  "sequence": 128,
+  "optimizer": "AdamW fused reference",
+  "pytorch_execution": "eager",
+  "resident_worker_capacity": 136,
+  "workers": 136,
+  "mode": "persistent",
+  "checks": [
+    {
+      "step": 1,
+      "loss": 10.96225357055664,
+      "cuda_loss": 10.96225357055664,
+      "worst_gradient_relative_rms": [
+        2.3799805148883024e-06,
+        "transformer.h.9.ln_2.weight"
+      ]
+    },
+    {
+      "step": 2,
+      "loss": 10.195509910583496,
+      "cuda_loss": 10.195509910583496,
+      "worst_gradient_relative_rms": [
+        3.062183895963244e-05,
+        "transformer.h.0.mlp.c_fc.weight"
+      ]
+    },
+    {
+      "step": 3,
+      "loss": 9.400040626525879,
+      "cuda_loss": 9.400035858154297,
+      "worst_gradient_relative_rms": [
+        3.505024142214097e-05,
+        "transformer.h.0.mlp.c_fc.weight"
+      ]
+    },
+    {
+      "step": 4,
+      "loss": 9.126668930053711,
+      "cuda_loss": 9.126670837402344,
+      "worst_gradient_relative_rms": [
+        3.6725756217492744e-05,
+        "transformer.h.1.mlp.c_fc.weight"
+      ]
+    },
+    {
+      "step": 5,
+      "loss": 8.357806205749512,
+      "cuda_loss": 8.35780143737793,
+      "worst_gradient_relative_rms": [
+        3.793439464061521e-05,
+        "transformer.h.1.mlp.c_fc.weight"
+      ]
+    }
+  ],
+  "tile_engine": "static",
+  "page_rows": [
+    8
+  ],
+  "page_engine": "warps",
+  "tile_regions": 24,
+  "page_pipelines": 24,
+  "pytorch": {
+    "gpu_median_ms": 86.23411560058594,
+    "wall_median_ms": 86.26581006683409,
+    "gpu_min_ms": 85.93385314941406,
+    "iterations": 5
+  },
+  "cuda": {
+    "gpu_median_ms": 83.39558410644531,
+    "wall_median_ms": 83.44241394661367,
+    "gpu_min_ms": 83.10476684570312,
+    "iterations": 5
+  },
+  "speedup": 1.034036952010763
+}

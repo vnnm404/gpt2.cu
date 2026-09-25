@@ -1,0 +1,123 @@
+========= COMPUTE-SANITIZER
+{"shape": [256, 256, 128, 128], "workers": 1, "tasks": 20, "cross_cta_edges": 0, "cross_instruction_overlap": true, "concurrent_instructions_on_distinct_ctas": false}
+{"shape": [256, 256, 128, 128], "workers": 3, "tasks": 20, "cross_cta_edges": 4, "cross_instruction_overlap": true, "concurrent_instructions_on_distinct_ctas": true}
+{"shape": [256, 256, 128, 128], "workers": 136, "tasks": 20, "cross_cta_edges": 4, "cross_instruction_overlap": true, "concurrent_instructions_on_distinct_ctas": true}
+{"shape": [67, 260, 96, 132], "workers": 1, "tasks": 16, "cross_cta_edges": 0, "cross_instruction_overlap": true, "concurrent_instructions_on_distinct_ctas": false}
+{"shape": [67, 260, 96, 132], "workers": 3, "tasks": 16, "cross_cta_edges": 9, "cross_instruction_overlap": true, "concurrent_instructions_on_distinct_ctas": true}
+{"shape": [67, 260, 96, 132], "workers": 136, "tasks": 16, "cross_cta_edges": 10, "cross_instruction_overlap": true, "concurrent_instructions_on_distinct_ctas": true}
+Page pipeline passed: columns=64, rows/page stream=1
+Page pipeline passed: columns=64, rows/page stream=2
+========= Barrier error detected. Missing wait.
+=========     at gpt2::PageBarrier::arrive() const+0x12460 in /root/gpt2.cu/include/gpt2/kernels/sync.cuh:55
+=========     by thread (128,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x50
+=========     Device Frame:gpt2::page_norm_warps(const gpt2::Operation &, int, float *)+0x12410 in /root/gpt2.cu/include/gpt2/kernels/page_pipeline.cuh:111
+=========     Device Frame:gpt2::page_norm(const gpt2::Operation &, int, float *)+0xd70 in /root/gpt2.cu/include/gpt2/kernels/page_pipeline.cuh:162
+=========     Device Frame:gpt2::execute(const gpt2::Operation &, int, float *)+0x50 in /root/gpt2.cu/src/executor.cu:18
+=========     Device Frame:gpt2::persistent(const gpt2::Operation *, int)+0x50 in /root/gpt2.cu/src/executor.cu:56
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========     Host Frame:cuLaunchCooperativeKernel [0x3696f7]
+=========                in /lib/x86_64-linux-gnu/libcuda.so.1
+=========     Host Frame:libcudart_static_9bebc5ebd1a83a8a29188e9dcfe20b70de154597 [0x12007]
+=========                in /root/gpt2.cu/build/libgpt2_executor.so
+=========     Host Frame:cudaLaunchCooperativeKernel [0x7567d]
+=========                in /root/gpt2.cu/build/libgpt2_executor.so
+=========     Host Frame:gpt2_launch [0xaf00]
+=========                in /root/gpt2.cu/build/libgpt2_executor.so
+=========     Host Frame:ffi_call_unix64 [0x6a49]
+=========                in /opt/conda/lib/python3.11/lib-dynload/../../libffi.so.8
+=========     Host Frame:ffi_call_int [0x5fe9]
+=========                in /opt/conda/lib/python3.11/lib-dynload/../../libffi.so.8
+=========     Host Frame:_ctypes_callproc.cold in /usr/local/src/conda/python-3.11.10/Modules/_ctypes/callproc.c:1262 [0x92c8]
+=========                in /opt/conda/lib/python3.11/lib-dynload/_ctypes.cpython-311-x86_64-linux-gnu.so
+=========     Host Frame:PyCFuncPtr_call.cold in /usr/local/src/conda/python-3.11.10/Modules/_ctypes/_ctypes.c:4201 [0x87ed]
+=========                in /opt/conda/lib/python3.11/lib-dynload/_ctypes.cpython-311-x86_64-linux-gnu.so
+=========     Host Frame:_PyObject_MakeTpCall in /usr/local/src/conda/python-3.11.10/Objects/call.c:214 [0x1d697a]
+=========                in /opt/conda/bin/python
+=========     Host Frame:_PyEval_EvalFrameDefault in /usr/local/src/conda/python-3.11.10/Python/ceval.c:4769 [0x1e3f93]
+=========                in /opt/conda/bin/python
+=========     Host Frame:_PyEval_Vector in /usr/local/src/conda/python-3.11.10/Python/ceval.c:6434 [0x29ac5c]
+=========                in /opt/conda/bin/python
+=========     Host Frame:PyEval_EvalCode in /usr/local/src/conda/python-3.11.10/Python/ceval.c:1148 [0x29a39e]
+=========                in /opt/conda/bin/python
+=========     Host Frame:run_eval_code_obj in /usr/local/src/conda/python-3.11.10/Python/pythonrun.c:1741 [0x2b8319]
+=========                in /opt/conda/bin/python
+=========     Host Frame:run_mod in /usr/local/src/conda/python-3.11.10/Python/pythonrun.c:1762 [0x2b3f92]
+=========                in /opt/conda/bin/python
+=========     Host Frame:pyrun_file in /usr/local/src/conda/python-3.11.10/Python/pythonrun.c:1657 [0x2c953f]
+=========                in /opt/conda/bin/python
+=========     Host Frame:_PyRun_SimpleFileObject in /usr/local/src/conda/python-3.11.10/Python/pythonrun.c:440 [0x2c8ecb]
+=========                in /opt/conda/bin/python
+=========     Host Frame:_PyRun_AnyFileObject in /usr/local/src/conda/python-3.11.10/Python/pythonrun.c:79 [0x2c8c63]
+=========                in /opt/conda/bin/python
+=========     Host Frame:Py_RunMain in /usr/local/src/conda/python-3.11.10/Modules/main.c:684 [0x2c3232]
+=========                in /opt/conda/bin/python
+=========     Host Frame:Py_BytesMain in /usr/local/src/conda/python-3.11.10/Modules/main.c:738 [0x28a616]
+=========                in /opt/conda/bin/python
+=========     Host Frame: [0x29d8f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame:__libc_start_main [0x29e3f]
+=========                in /lib/x86_64-linux-gnu/libc.so.6
+=========     Host Frame: [0x28a4c9]
+=========                in /opt/conda/bin/python
+=========
+Traceback (most recent call last):
+  File "/opt/conda/lib/python3.11/site-packages/torch/testing/_comparison.py", line 1232, in not_close_error_metas
+    pair.compare()
+  File "/opt/conda/lib/python3.11/site-packages/torch/testing/_comparison.py", line 711, in compare
+    self._compare_values(actual, expected)
+  File "/opt/conda/lib/python3.11/site-packages/torch/testing/_comparison.py", line 841, in _compare_values
+    compare_fn(
+  File "/opt/conda/lib/python3.11/site-packages/torch/testing/_comparison.py", line 1023, in _compare_regular_values_close
+    if torch.all(matches):
+RuntimeError: CUDA error: unspecified launch failure
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/root/gpt2.cu/benchmarks/check_tile_schedule.py", line 84, in <module>
+    main()
+  File "/root/gpt2.cu/benchmarks/check_tile_schedule.py", line 78, in main
+    torch.testing.assert_close(residual, x + y, atol=0, rtol=0)
+  File "/opt/conda/lib/python3.11/site-packages/torch/testing/_comparison.py", line 1508, in assert_close
+    error_metas = not_close_error_metas(
+                  ^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/torch/testing/_comparison.py", line 1239, in not_close_error_metas
+    f"Comparing\n\n"
+  File "/opt/conda/lib/python3.11/site-packages/torch/testing/_comparison.py", line 378, in __repr__
+    body = [
+           ^
+  File "/opt/conda/lib/python3.11/site-packages/torch/testing/_comparison.py", line 379, in <listcomp>
+    f"    {name}={value!s},"
+  File "/opt/conda/lib/python3.11/site-packages/torch/_tensor.py", line 523, in __repr__
+    return torch._tensor_str._str(self, tensor_contents=tensor_contents)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/torch/_tensor_str.py", line 708, in _str
+    return _str_intern(self, tensor_contents=tensor_contents)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/torch/_tensor_str.py", line 625, in _str_intern
+    tensor_str = _tensor_str(self, indent)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/torch/_tensor_str.py", line 357, in _tensor_str
+    formatter = _Formatter(get_summarized_data(self) if summarize else self)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/torch/_tensor_str.py", line 393, in get_summarized_data
+    return torch.stack([get_summarized_data(x) for x in (start + end)])
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/torch/_tensor_str.py", line 393, in <listcomp>
+    return torch.stack([get_summarized_data(x) for x in (start + end)])
+                        ^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.11/site-packages/torch/_tensor_str.py", line 383, in get_summarized_data
+    return torch.cat(
+           ^^^^^^^^^^
+RuntimeError: CUDA error: unspecified launch failure
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+========= Target application returned an error
+========= ERROR SUMMARY: 1 error

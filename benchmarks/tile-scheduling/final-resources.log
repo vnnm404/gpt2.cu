@@ -1,0 +1,38 @@
+
+Fatbin elf code:
+================
+arch = sm_86
+code version = [1,7]
+host = linux
+compile_size = 64bit
+identifier = /root/gpt2.cu/src/executor.cu
+
+Resource usage:
+ Common:
+  GLOBAL:0
+
+Fatbin elf code:
+================
+arch = sm_86
+code version = [1,7]
+host = linux
+compile_size = 64bit
+identifier = /root/gpt2.cu/src/executor.cu
+
+Resource usage:
+ Common:
+  GLOBAL:2 CONSTANT[4]:16
+ Function _ZN4gpt210persistentEPKNS_9OperationEi:
+  REG:128 STACK:0 SHARED:112 LOCAL:0 CONSTANT[2]:204 CONSTANT[0]:364 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN4gpt210standaloneENS_9OperationE:
+  REG:100 STACK:0 SHARED:32 LOCAL:0 CONSTANT[2]:148 CONSTANT[0]:464 TEXTURE:0 SURFACE:0 SAMPLER:0
+
+Fatbin ptx code:
+================
+arch = sm_86
+code version = [8,4]
+host = linux
+compile_size = 64bit
+compressed
+identifier = /root/gpt2.cu/src/executor.cu
+ptxasOptions =  --generate-line-info

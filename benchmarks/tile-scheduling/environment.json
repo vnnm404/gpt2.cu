@@ -1,0 +1,20 @@
+{
+  "instance": 52595750,
+  "destroyed_confirmed": true,
+  "destruction_checked_utc": "2026-09-25T14:20:15.670913+00:00",
+  "rental_started_utc": "2026-09-25T13:24:21.204141+00:00",
+  "elapsed_hours_upper_estimate": 0.9317963224649429,
+  "listed_hourly_usd_including_disk": 0.12833333333333335,
+  "estimated_usd_upper": 0.11958052804966769,
+  "cost_note": "Elapsed-time estimate at listed rate, not a billing invoice.",
+  "gpu": "NVIDIA GeForce RTX 3080",
+  "memory_mib": 10240,
+  "sm_count": 68,
+  "compute_capability": "8.6",
+  "power_limit_w": 240,
+  "driver": "595.84",
+  "torch": "2.5.1+cu124",
+  "build_cuda": "12.4",
+  "sanitizer": "2025.3.1.0",
+  "source_sha256": "ffa9c785413e720d4caa0a3768c8a2d7d78a3d7b7168119faf71319de0708f31"
+}

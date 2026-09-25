@@ -43,9 +43,7 @@ __device__ __forceinline__ void adamw(const Operation &o, int tile) {
     }
 }
 
-__device__ __forceinline__ void elementwise(const Operation &o, int tile) {
-    int begin = tile * 4096 + threadIdx.x;
-    for (int i = begin; i < min(o.m, (tile + 1) * 4096); i += threads) {
+__device__ __forceinline__ void elementwise_at(const Operation &o, int i) {
         switch (o.code) {
         case Code::clear: o.p[0][i] = 0; break;
         case Code::sum_splits: {
@@ -87,7 +85,11 @@ __device__ __forceinline__ void elementwise(const Operation &o, int tile) {
         }
         default: break;
         }
-    }
+}
+
+__device__ __forceinline__ void elementwise(const Operation &o, int tile) {
+    for (int i = tile * 4096 + threadIdx.x; i < min(o.m, (tile + 1) * 4096); i += threads)
+        elementwise_at(o, i);
 }
 
 __device__ __forceinline__ void norm(const Operation &o, int row, float *s) {

@@ -1,0 +1,103 @@
+{
+  "batch": 4,
+  "sequence": 64,
+  "gpu": "NVIDIA GeForce RTX 3080",
+  "torch": "2.5.1+cu124",
+  "cuda": "12.4",
+  "dtype": "float32",
+  "tf32": false,
+  "source_sha256": "ffa9c785413e720d4caa0a3768c8a2d7d78a3d7b7168119faf71319de0708f31",
+  "workers": 136,
+  "page_engine": "warps",
+  "page_rows": 2,
+  "repeats": 3,
+  "iterations": 50,
+  "results": {
+    "coarse": [
+      {
+        "gpu_median_ms": 26.87939167022705,
+        "wall_median_ms": 26.914463553112,
+        "gpu_min_ms": 26.65875244140625,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 27.056096076965332,
+        "wall_median_ms": 27.087984490208328,
+        "gpu_min_ms": 26.75814437866211,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 27.079679489135742,
+        "wall_median_ms": 27.108151523862034,
+        "gpu_min_ms": 26.76620864868164,
+        "iterations": 50
+      }
+    ],
+    "pages": [
+      {
+        "gpu_median_ms": 26.822656631469727,
+        "wall_median_ms": 26.84857149142772,
+        "gpu_min_ms": 26.463232040405273,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 26.86115264892578,
+        "wall_median_ms": 26.886517531238496,
+        "gpu_min_ms": 26.573823928833008,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 26.902015686035156,
+        "wall_median_ms": 26.935027446597815,
+        "gpu_min_ms": 26.631168365478516,
+        "iterations": 50
+      }
+    ],
+    "ready": [
+      {
+        "gpu_median_ms": 28.063743591308594,
+        "wall_median_ms": 28.110643499530852,
+        "gpu_min_ms": 27.80259132385254,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 28.158592224121094,
+        "wall_median_ms": 28.18601852050051,
+        "gpu_min_ms": 27.901952743530273,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 28.179967880249023,
+        "wall_median_ms": 28.22700049728155,
+        "gpu_min_ms": 27.924480438232422,
+        "iterations": 50
+      }
+    ],
+    "static": [
+      {
+        "gpu_median_ms": 28.022208213806152,
+        "wall_median_ms": 28.046486026141793,
+        "gpu_min_ms": 27.75449562072754,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 28.05196762084961,
+        "wall_median_ms": 28.085700992960483,
+        "gpu_min_ms": 27.79136085510254,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 28.101632118225098,
+        "wall_median_ms": 28.13314099330455,
+        "gpu_min_ms": 27.826175689697266,
+        "iterations": 50
+      }
+    ]
+  },
+  "median_gpu_ms": {
+    "coarse": 27.056096076965332,
+    "pages": 26.86115264892578,
+    "ready": 28.158592224121094,
+    "static": 28.05196762084961
+  }
+}

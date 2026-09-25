@@ -1,3 +1,6 @@
+The current branch's fine-grained scheduling study is in [TILE_SCHEDULING.md](TILE_SCHEDULING.md).
+Measurements below are historical results for the earlier grouped scheduler.
+
 # RTX 3080 benchmark and validation
 
 Recorded result: **25.08 ms** for the persistent step versus **32.74 ms** for

@@ -1,0 +1,20 @@
+========= COMPUTE-SANITIZER
+{"shape": [256, 256, 128, 128], "workers": 1, "tasks": 20, "cross_cta_edges": 0, "cross_instruction_overlap": false, "concurrent_instructions_on_distinct_ctas": false}
+{"shape": [256, 256, 128, 128], "workers": 3, "tasks": 20, "cross_cta_edges": 12, "cross_instruction_overlap": true, "concurrent_instructions_on_distinct_ctas": true}
+{"shape": [256, 256, 128, 128], "workers": 136, "tasks": 20, "cross_cta_edges": 16, "cross_instruction_overlap": true, "concurrent_instructions_on_distinct_ctas": true}
+{"shape": [67, 260, 96, 132], "workers": 1, "tasks": 16, "cross_cta_edges": 0, "cross_instruction_overlap": false, "concurrent_instructions_on_distinct_ctas": false}
+{"shape": [67, 260, 96, 132], "workers": 3, "tasks": 16, "cross_cta_edges": 12, "cross_instruction_overlap": false, "concurrent_instructions_on_distinct_ctas": false}
+{"shape": [67, 260, 96, 132], "workers": 136, "tasks": 16, "cross_cta_edges": 18, "cross_instruction_overlap": true, "concurrent_instructions_on_distinct_ctas": true}
+Page pipeline passed: columns=64, rows/page stream=1
+Page pipeline passed: columns=64, rows/page stream=2
+Page pipeline passed: columns=64, rows/page stream=7
+Page pipeline passed: columns=260, rows/page stream=1
+Page pipeline passed: columns=260, rows/page stream=2
+Page pipeline passed: columns=260, rows/page stream=7
+Page pipeline passed: columns=768, rows/page stream=1
+Page pipeline passed: columns=768, rows/page stream=2
+Page pipeline passed: columns=768, rows/page stream=7
+Page pipeline passed: columns=1024, rows/page stream=1
+Page pipeline passed: columns=1024, rows/page stream=2
+Page pipeline passed: columns=1024, rows/page stream=7
+========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)

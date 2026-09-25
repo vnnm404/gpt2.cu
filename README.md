@@ -4,13 +4,15 @@ GPT-2 forward, mean cross-entropy loss, backward, and AdamW execute in one
 persistent CUDA kernel. Parameters, activations, gradients, and optimizer state
 use **FP32**. GEMMs use ordinary SIMT FP32 arithmetic, not TF32 or mixed precision.
 
-The rewritten executor reaches approximately **25 ms per step**, versus **33 ms**
-for the matching PyTorch eager model with fused AdamW on an RTX 3080, at batch 4
-and sequence length 64. See [benchmark methodology](benchmarks/README.md) and the
-recorded measurements in `benchmarks/rtx3080.json` for exact results and scope.
-A matched 200-step text-training run takes **5.00 s**, versus **6.40 s** for
-PyTorch and **5.18 s** for the previous megakernel; see the
-[mini-training results](benchmarks/README.md#mini-training-run).
+This branch experiments with **fine-grained RTX 3080 scheduling**. MLP forward
+and backward instructions use tile dependencies, and residual addition plus
+normalization use reusable shared-memory pages with asynchronous input loading.
+See [the scheduling study, measurements, and limits](benchmarks/TILE_SCHEDULING.md).
+Fine-grained execution is demonstrated; it should not be assumed faster for every
+shape. The original grouped scheduler remains available for direct comparison.
+
+The [earlier RTX 3080 benchmarks](benchmarks/README.md) describe commit `d1611e6`
+and are historical measurements, not measurements of this branch.
 
 ## Run
 
@@ -36,6 +38,13 @@ operation benchmarks, and synchronization validation.
 - `include/gpt2/executor.h`: operation descriptors and host API.
 - `include/gpt2/kernels/gemm.cuh`: inlined CUTLASS SIMT threadblock GEMMs with
   double buffering, reduction partitioning, and an L2-oriented tile order.
+- `gpt2_cuda/schedule.py`: rectangular tile dependencies, shared prerequisite
+  counters, and GPU task metadata for explicitly marked MLP regions.
+- `include/gpt2/kernels/tile_schedule.cuh`: ready-task and static topological
+  scheduling, with device-scoped acquire/release publication.
+- `include/gpt2/kernels/page_pipeline.cuh`: two-page residual/normalization
+  pipeline using loader/compute warp groups and Ampere barriers.
+- `include/gpt2/kernels/sync.cuh`: scoped atomic and page-barrier primitives.
 - `include/gpt2/kernels/attention.cuh`: causal attention and backward kernels;
   key/value gradients are gathered without float atomics.
 - `include/gpt2/kernels/elementwise.cuh`: normalization, embeddings, residuals,
@@ -45,12 +54,16 @@ operation benchmarks, and synchronization validation.
 All device functions are visible in one translation unit. No separately compiled
 device functions or nested kernel launches sit between the scheduler and GEMMs.
 
-The host groups operations only when their memory ranges are independent.
-Resident GPU workers share each group's tile space, allowing independent
-backward operations to overlap. Cooperative grid barriers publish completed
-writes between dependent groups. Worker count comes from actual SM count and
-compiled-kernel occupancy; a block is not assumed to have physical SM affinity.
-Even workers with no work participate in every grid barrier.
+Outside the marked MLP regions, the host groups independent operations and uses
+cooperative grid barriers between groups. Inside an MLP region, workers publish
+completed tiles and consumers wait only for their own prerequisites. A consumer
+can execute while unrelated producer tiles remain unfinished. Region entry/exit
+still uses grid synchronization. Shared-memory pages remain private to each CTA;
+cross-CTA data is passed through global memory.
+
+Worker count comes from actual SM count and compiled-kernel occupancy. No block
+is assumed to have physical SM affinity, and oversized cooperative grids are
+rejected. All workers participate in each remaining grid barrier.
 
 The vocabulary is padded internally to 50,304 rows for layout alignment. Loss
 and logits exposed to the caller still use the original 50,257-token vocabulary;
@@ -71,7 +84,7 @@ print(training.mean_loss.item())     # synchronize only when reporting
 Shapes and tensor addresses are fixed when the program is constructed. Update
 input buffers in place for subsequent batches. The implemented attention head
 width is 64 and sequence lengths are bounded at 256; performance is tuned and
-reported for batch 4, sequence 64, GPT-2 124M. The results do not establish parity
+reported for GPT-2 124M at batches/sequences 4×64 and 8×128. The results do not establish parity
 with `torch.compile`, CUDA Graphs, mixed-precision training, or other GPUs/shapes.
 
 The original `src/mk.cu`, `src/train.cu`, layer code, and `tests/test_train*.cu`

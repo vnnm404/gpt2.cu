@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class Code(enum.IntEnum):
-    GEMM, ADD, GELU, GELU_BACKWARD, NORM, NORM_BACKWARD, NORM_PARAMETERS, EMBEDDING, EMBEDDING_BACKWARD, ATTENTION, ATTENTION_BACKWARD, ATTENTION_KV_BACKWARD, CROSS_ENTROPY, SUM_ROWS, ADAMW, CLEAR, ADVANCE, SUM_SPLITS = range(18)
+    GEMM, ADD, GELU, GELU_BACKWARD, NORM, NORM_BACKWARD, NORM_PARAMETERS, EMBEDDING, EMBEDDING_BACKWARD, ATTENTION, ATTENTION_BACKWARD, ATTENTION_KV_BACKWARD, CROSS_ENTROPY, SUM_ROWS, ADAMW, CLEAR, ADVANCE, SUM_SPLITS, TILE_GRAPH, PAGE_NORM = range(20)
 
 
 class Operation(ct.Structure):
@@ -79,6 +79,9 @@ class Program:
         self.labels = []
         self.allocations = []
         self.accesses = []
+        self.shapes = {}
+        self.tile_graphs = []
+        self.regions = []
 
     def empty(self, shape, *, zero=False):
         out = (torch.zeros if zero else torch.empty)(shape, device="cuda", dtype=torch.float32)
@@ -93,6 +96,7 @@ class Program:
         if any(p is not None and not p.is_contiguous() for p in pointers):
             raise ValueError("Operation tensors must be contiguous")
         self.allocations.extend(p for p in pointers if p is not None)
+        self.shapes.update((p.data_ptr(), tuple(p.shape)) for p in pointers if p is not None)
         op = Operation(int(code), tiles, m, n, k, flags)
         for i, p in enumerate(pointers):
             op.p[i] = p.data_ptr() if p is not None else None
@@ -133,23 +137,6 @@ class Program:
     def upload(self):
         if not self.ops:
             raise ValueError("Cannot upload an empty program")
-        for op in self.ops:
-            op.group = 0
-        def overlap(left, right):
-            return any(a < d and c < b for a, b in left for c, d in right)
-
-        start, reads, writes = 0, [], []
-        self.stages = 0
-        for i, (r, w) in enumerate(self.accesses):
-            if overlap(r, writes) or overlap(w, reads) or os.getenv("GROUP", "1") == "0":
-                if i > start:
-                    self.ops[start].group = i - start
-                    self.stages += 1
-                start, reads, writes = i, [], []
-            reads.extend(r)
-            writes.extend(w)
-        self.ops[start].group = len(self.ops) - start
-        self.stages += 1
         prepare = self.backend.lib.gpt2_gemm_parameters
         for op in self.ops:
             if op.code == Code.GEMM:
@@ -159,12 +146,86 @@ class Program:
                 device = torch.frombuffer(bytearray(host.raw), dtype=torch.uint8).cuda()
                 self.allocations.append(device)
                 op.p[7] = device.data_ptr()
-        raw = bytes((Operation * len(self.ops))(*self.ops))
+        self.tile_graphs = []
+        self.page_pipelines = 0
+        self.page_traces = []
+        self.page_rows = []
+        scheduled, accesses = [], []
+        page_engine = os.getenv("PAGE_ENGINE", "warps")
+        if page_engine not in ("warps", "collective"):
+            raise ValueError("PAGE_ENGINE must be warps or collective")
+        if os.getenv("TILE_SCHEDULE", "1") == "1":
+            from .schedule import compile_region
+            regions = dict(self.regions)
+            previous = 0
+            for begin, end in sorted(self.regions):
+                if not previous <= begin < end <= len(self.ops):
+                    raise ValueError("Tile regions must be disjoint instruction spans")
+                previous = end
+        else:
+            regions = {}
+        i = 0
+        while i < len(self.ops):
+            if i in regions:
+                end = regions[i]
+                scheduled.append(compile_region(self, i, end))
+                accesses.append((sum((a[0] for a in self.accesses[i:end]), []),
+                                 sum((a[1] for a in self.accesses[i:end]), [])))
+                i = end
+            elif (os.getenv("PAGE_PIPELINE", "1") == "1" and i + 1 < len(self.ops)
+                  and self.ops[i].code == Code.ADD and self.ops[i+1].code == Code.NORM
+                  and self.ops[i].p[2] == self.ops[i+1].p[0]
+                  and self.ops[i].p[1] and self.ops[i+1].n <= 1024 and self.ops[i+1].n % 4 == 0
+                  and self.ops[i].m == self.ops[i+1].m * self.ops[i+1].n
+                  and all(self.ops[i].p[j] % 16 == 0 for j in (0, 1))):
+                add, norm = self.ops[i:i+2]
+                default_rows = max(2, min(8, (norm.m + self.backend.capacity - 1) // self.backend.capacity))
+                rows = int(os.getenv("PAGE_ROWS", str(default_rows)))
+                if not 1 <= rows <= 32:
+                    raise ValueError("PAGE_ROWS must be in [1, 32]")
+                op = Operation(int(Code.PAGE_NORM), (norm.m + rows - 1) // rows,
+                               norm.m, norm.n, int(page_engine == "warps"), rows)
+                for j, pointer in enumerate([add.p[0], add.p[1], add.p[2],
+                                             norm.p[1], norm.p[2], norm.p[3], norm.p[4]]):
+                    op.p[j] = pointer
+                if os.getenv("TILE_TRACE", "0") == "1" and op.k:
+                    trace = torch.zeros((norm.m, 4), dtype=torch.int64, device="cuda")
+                    self.allocations.append(trace)
+                    self.page_traces.append(trace)
+                    op.p[7] = trace.data_ptr()
+                scheduled.append(op)
+                accesses.append((self.accesses[i][0] + self.accesses[i+1][0],
+                                 self.accesses[i][1] + self.accesses[i+1][1]))
+                self.page_pipelines += 1
+                self.page_rows.append(rows)
+                i += 2
+            else:
+                scheduled.append(Operation.from_buffer_copy(bytes(self.ops[i])))
+                accesses.append(self.accesses[i])
+                i += 1
+        def overlap(left, right):
+            return any(a < d and c < b for a, b in left for c, d in right)
+        start, reads, writes = 0, [], []
+        self.stages = 0
+        for i, (r, w) in enumerate(accesses):
+            boundary = (scheduled[i].code == Code.TILE_GRAPH or
+                        (i > 0 and scheduled[i-1].code == Code.TILE_GRAPH))
+            if boundary or overlap(r, writes) or overlap(w, reads) or os.getenv("GROUP", "1") == "0":
+                if i > start:
+                    scheduled[start].group = i - start
+                    self.stages += 1
+                start, reads, writes = i, [], []
+            reads.extend(r)
+            writes.extend(w)
+        scheduled[start].group = len(scheduled) - start
+        self.stages += 1
+        self.scheduled_count = len(scheduled)
+        raw = bytes((Operation * len(scheduled))(*scheduled))
         self.descriptors = torch.frombuffer(bytearray(raw), dtype=torch.uint8).cuda()
 
     def run(self, persistent=True, workers=0):
         if persistent:
-            self.backend.launch(self.descriptors, len(self.ops), workers)
+            self.backend.launch(self.descriptors, self.scheduled_count, workers)
         else:
             for op in self.ops:
                 self.backend.operation(op)
@@ -305,8 +366,21 @@ class Training(Program):
             p = f"transformer.h.{i}"
             qkv = linear(norm(x, p + ".ln_1"), p + ".attn.c_attn")
             x = add(x, linear(attention(qkv), p + ".attn.c_proj"))
-            y = linear(norm(x, p + ".ln_2"), p + ".mlp.c_fc")
-            x = add(x, linear(gelu(y), p + ".mlp.c_proj"))
+            normalized = norm(x, p + ".ln_2")
+            begin, tape_begin = len(self.ops), len(self.tape)
+            y = linear(normalized, p + ".mlp.c_fc")
+            y = linear(gelu(y), p + ".mlp.c_proj")
+            self.regions.append((begin, len(self.ops)))
+            backward_steps = self.tape[tape_begin:]
+            del self.tape[tape_begin:]
+
+            def backward_mlp(steps=backward_steps):
+                begin = len(self.ops)
+                for step in reversed(steps):
+                    step()
+                self.regions.append((begin, len(self.ops)))
+            self.tape.append(backward_mlp)
+            x = add(x, y)
         logits = linear(norm(x, "transformer.ln_f"), "lm_head", tied=True)
         self.logits = logits[:, :vocab]
         self.loss = self.empty(B * T)

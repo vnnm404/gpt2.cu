@@ -41,3 +41,22 @@ worker count; the default comes from compiled-kernel occupancy and the device.
 Use a process timeout during kernel development. The launcher rejects an
 oversized cooperative grid before dispatch, and all workers participate in
 each stage's grid barrier, including workers with no assigned tiles.
+
+## Fine-grained RTX 3080 experiment
+
+The build remains `sm_86` with one translation unit and FP32 SIMT GEMMs.
+No Hopper instructions are required. See [the scheduling report](benchmarks/TILE_SCHEDULING.md)
+for sanitizer versions, exact synchronization, traces, and measured tradeoffs.
+
+```sh
+python benchmarks/check_tile_schedule.py
+python benchmarks/compare.py --batch 8 --sequence 128 --steps 5 --iterations 50
+TILE_SCHEDULE=0 PAGE_PIPELINE=0 python benchmarks/compare.py --batch 8 --sequence 128
+PAGE_ROWS=8 python benchmarks/profile_tile_schedule.py
+python benchmarks/plot_tile_schedule.py  # optional matplotlib dependency
+```
+
+`TILE_ENGINE=static` selects topological worker streams; the default ready queue
+assigns only runnable tasks. `PAGE_ENGINE=collective` selects the all-thread
+async-copy implementation; the default uses loader/compute warp groups and
+Ampere page barriers. These are separate ablations, not different precision modes.

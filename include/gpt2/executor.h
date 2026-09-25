@@ -5,11 +5,14 @@ namespace gpt2 {
 enum class Code : int { gemm, add, gelu, gelu_backward, norm, norm_backward,
                        norm_parameters, embedding, embedding_backward,
                        attention, attention_backward, attention_kv_backward,
-                       cross_entropy, sum_rows, adamw, clear, advance, sum_splits };
+                       cross_entropy, sum_rows, adamw, clear, advance, sum_splits, tile_graph, page_norm };
 
 // Device pointers are owned by the caller. GEMM flags: transpose A/B, add C;
 // bits 8+ hold the reduction partition count. group counts independent operations
 // in a stage; only the first operation's group field is used by the executor.
+// tile_graph is an internal cooperative instruction: p[0..7] hold operations,
+// tasks, edges, ready queue, dependency counters, queue control, roots, trace.
+// page_norm uses two CTA-local pages; flags is rows/task and k selects warp roles.
 struct Operation {
     Code code;
     int tiles, m, n, k, flags, group;

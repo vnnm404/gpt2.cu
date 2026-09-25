@@ -22,6 +22,8 @@ def error(actual, expected):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--batch", type=int, default=4)
+    parser.add_argument("--sequence", type=int, default=64)
     parser.add_argument("--layers", type=int, default=12)
     parser.add_argument("--iterations", type=int, default=20)
     parser.add_argument("--steps", type=int, default=3)
@@ -30,12 +32,14 @@ def main():
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    if args.batch < 1 or not 1 <= args.sequence <= 256 or args.steps < 1 or args.iterations < 1:
+        parser.error("positive batch/steps/iterations and sequence in [1, 256] required")
     torch.set_num_threads(1)
     torch.manual_seed(123)
     torch.backends.cuda.matmul.allow_tf32 = False
     model = GPT(GPTConfig(n_layer=args.layers)).cuda()
-    tokens = torch.randint(50257, (4, 64), device="cuda", dtype=torch.int32)
-    targets = torch.randint(50257, (4, 64), device="cuda", dtype=torch.int32)
+    tokens = torch.randint(50257, (args.batch, args.sequence), device="cuda", dtype=torch.int32)
+    targets = torch.randint(50257, (args.batch, args.sequence), device="cuda", dtype=torch.int32)
     backend = Backend()
     print(f"GPU={torch.cuda.get_device_name()} resident worker capacity={backend.capacity}", flush=True)
     program = Training(backend, model, tokens, targets)
@@ -89,15 +93,18 @@ def main():
     digest = hashlib.sha256()
     root = Path(__file__).resolve().parents[1]
     for path in sorted([root / "src/executor.cu", root / "include/gpt2/executor.h",
-                        root / "gpt2_cuda/__init__.py", *root.glob("include/gpt2/kernels/*.cuh")]):
+                        *root.glob("include/gpt2/kernels/*.cuh"), *root.glob("gpt2_cuda/*.py")]):
         digest.update(path.read_bytes())
     result = {"source_sha256": digest.hexdigest(), "gpu": torch.cuda.get_device_name(), "torch": torch.__version__, "cuda_version": torch.version.cuda,
               "tf32": False, "dtype": "float32", "layers": args.layers,
               "cuda_gemm": backend.gemm, "grouped": os.getenv("GROUP", "1") != "0",
               "operations": len(program.ops), "stages": program.stages,
-              "batch": 4, "sequence": 64, "optimizer": "AdamW fused reference", "pytorch_execution": "eager",
+              "batch": args.batch, "sequence": args.sequence, "optimizer": "AdamW fused reference", "pytorch_execution": "eager",
               "resident_worker_capacity": backend.capacity, "workers": args.workers or backend.workers,
-              "mode": "standalone" if args.standalone else "persistent", "checks": checks}
+              "mode": "standalone" if args.standalone else "persistent", "checks": checks,
+              "tile_engine": os.getenv("TILE_ENGINE", "ready"), "page_rows": sorted(set(program.page_rows)),
+              "page_engine": os.getenv("PAGE_ENGINE", "warps"),
+              "tile_regions": len(program.tile_graphs), "page_pipelines": program.page_pipelines}
     result["pytorch"] = measure(reference_step, iterations=args.iterations)
     result["cuda"] = measure(cuda_step, iterations=args.iterations)
     result["speedup"] = result["pytorch"]["gpu_median_ms"] / result["cuda"]["gpu_median_ms"]
