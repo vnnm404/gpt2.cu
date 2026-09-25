@@ -9,6 +9,7 @@ file(GLOB_RECURSE SOURCES
 # Exclude layer files since mk.cu includes them directly for optimization
 list(FILTER SOURCES EXCLUDE REGEX ".*/layers/.*\.cu$")
 
+list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/executor.cu")
 add_library(gpt2 STATIC ${SOURCES})
 target_include_directories(gpt2 PUBLIC ${CMAKE_SOURCE_DIR}/include)
 set_target_properties(gpt2 PROPERTIES 

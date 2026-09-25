@@ -1,0 +1,80 @@
+{
+  "source_sha256": "9e9381fad28fa7c3ea732fba4b09620abc45c9e9d745995981cee272146e7678",
+  "gpu": "NVIDIA GeForce RTX 3080",
+  "torch": "2.5.1+cu124",
+  "cuda_version": "12.4",
+  "tf32": false,
+  "dtype": "float32",
+  "layers": 12,
+  "cuda_gemm": "cutlass_simt_fp32",
+  "grouped": true,
+  "operations": 506,
+  "stages": 357,
+  "batch": 4,
+  "sequence": 64,
+  "optimizer": "AdamW fused reference",
+  "pytorch_execution": "eager",
+  "resident_worker_capacity": 136,
+  "workers": 136,
+  "mode": "persistent",
+  "checks": [
+    {
+      "step": 1,
+      "loss": 10.98294448852539,
+      "cuda_loss": 10.982942581176758,
+      "worst_gradient_relative_rms": [
+        1.7207970586241572e-06,
+        "transformer.h.3.ln_2.weight"
+      ]
+    },
+    {
+      "step": 2,
+      "loss": 9.52655029296875,
+      "cuda_loss": 9.5265531539917,
+      "worst_gradient_relative_rms": [
+        2.13893799809739e-05,
+        "transformer.h.1.mlp.c_fc.weight"
+      ]
+    },
+    {
+      "step": 3,
+      "loss": 8.431352615356445,
+      "cuda_loss": 8.431341171264648,
+      "worst_gradient_relative_rms": [
+        2.8943783036083914e-05,
+        "transformer.h.7.mlp.c_fc.weight"
+      ]
+    },
+    {
+      "step": 4,
+      "loss": 8.02230453491211,
+      "cuda_loss": 8.02230453491211,
+      "worst_gradient_relative_rms": [
+        3.317314985906705e-05,
+        "transformer.h.2.ln_2.weight"
+      ]
+    },
+    {
+      "step": 5,
+      "loss": 6.6396307945251465,
+      "cuda_loss": 6.639618396759033,
+      "worst_gradient_relative_rms": [
+        3.816136813838966e-05,
+        "transformer.h.7.attn.c_attn.bias"
+      ]
+    }
+  ],
+  "pytorch": {
+    "gpu_median_ms": 32.48486518859863,
+    "wall_median_ms": 32.51077050026652,
+    "gpu_min_ms": 32.15871810913086,
+    "iterations": 50
+  },
+  "cuda": {
+    "gpu_median_ms": 25.862656593322754,
+    "wall_median_ms": 25.87878849953995,
+    "gpu_min_ms": 25.72390365600586,
+    "iterations": 50
+  },
+  "speedup": 1.2560529144165957
+}

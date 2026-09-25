@@ -1,70 +1,43 @@
-# Build Instructions
+# Build and validation
 
-## Build Modes
+The executor requires an NVIDIA CUDA development environment, Python, PyTorch,
+and a C++17 compiler. `pyproject.toml` specifies Python 3.12; the measured GPU
+environment used Python 3.11, PyTorch 2.5.1, CUDA 12.4, and an RTX 3080.
 
-This project supports two build modes:
-
-### Debug Mode
-Debug mode includes:
-- Debug symbols (`-g`)
-- No optimization (`-O0`)
-- AddressSanitizer (ASan) for detecting memory errors
-- UndefinedBehaviorSanitizer (UBSan) for catching undefined behavior
-- Extra compiler warnings
-- CUDA debug symbols (`-G`)
-
-To build in Debug mode:
-```bash
-mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Debug ..
-make
+```sh
+uv sync
+uv run python benchmarks/compare.py --steps 5 --iterations 50
 ```
 
-### Release Mode
-Release mode includes:
-- Maximum optimization (`-O3`)
-- Native CPU architecture optimizations (`-march=native`)
-- Fast math for CUDA (`--use_fast_math`)
-- NDEBUG macro defined
+The loader fetches pinned CUTLASS 3.5.1 into `build/cutlass` and compiles
+`build/libgpt2_executor.so` with nvcc. All device code is compiled in one
+translation unit, with FP32 arithmetic and without `--use_fast_math`.
 
-To build in Release mode:
-```bash
-mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
-make
+An explicit CMake build produces the same library:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86
+cmake --build build -j
 ```
 
-### Default Build Type
-If you don't specify a build type, the default is **Release**.
+`CUTLASS_ROOT` can point to an existing checkout. The Python loader expects the
+pinned checkout at `build/cutlass` and verifies its revision before building.
+To also compile the original library and drivers, configure with
+`-DGPT2_BUILD_LEGACY=ON`. Those drivers retain their original binary model inputs.
 
-## Running with Sanitizers
+Run validation on the GPU host:
 
-When running programs built in Debug mode, the sanitizers are automatically enabled. If you encounter sanitizer reports, they will show detailed information about memory issues or undefined behavior.
-
-You can control sanitizer behavior with environment variables:
-```bash
-# Suppress specific sanitizer checks (example)
-export ASAN_OPTIONS=detect_leaks=0
-
-# Get more verbose output
-export ASAN_OPTIONS=verbosity=1
-
-# Continue after finding errors (useful for testing)
-export ASAN_OPTIONS=halt_on_error=0
+```sh
+timeout 180 python benchmarks/check_runtime.py
+timeout 240 compute-sanitizer --tool synccheck --error-exitcode 99 python benchmarks/check_runtime.py
+timeout 240 python benchmarks/gemm.py
+timeout 300 python benchmarks/compare.py --steps 5 --iterations 50 --output benchmark.json
 ```
 
-## Clean Rebuild
+Use `--standalone` to launch the same operations individually. Set `GROUP=0`
+to disable grouping of independent operations. `--workers N` selects a checked
+worker count; the default comes from compiled-kernel occupancy and the device.
 
-To switch between build modes, it's recommended to clean the build directory:
-```bash
-rm -rf build
-mkdir build && cd build
-cmake -DCMAKE_BUILD_TYPE=<Debug|Release> ..
-make
-```
-
-## Notes
-
-- Sanitizers (ASan/UBSan) are only applied to C code, not CUDA code, as CUDA has its own debugging tools
-- On Windows, sanitizers are not enabled automatically
-- Debug builds will be significantly slower than Release builds due to lack of optimization and sanitizer overhead
+Use a process timeout during kernel development. The launcher rejects an
+oversized cooperative grid before dispatch, and all workers participate in
+each stage's grid barrier, including workers with no assigned tiles.

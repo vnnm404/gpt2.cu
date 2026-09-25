@@ -1,0 +1,37 @@
+RTX 3080 validation, CUDA 12.4 / PyTorch 2.5.1
+CMake Release build: new executor and all legacy targets passed.
+
+Runtime checks
+barrier and odd-shape checks passed: 1 workers
+barrier and odd-shape checks passed: 3 workers
+barrier and odd-shape checks passed: 68 workers
+barrier and odd-shape checks passed: 136 workers
+AdamW parameters and both moments match for ten steps
+full training checks passed: sequence=1, vocabulary=257
+full training checks passed: sequence=17, vocabulary=257
+full training checks passed: sequence=64, vocabulary=257
+full training checks passed: sequence=256, vocabulary=257
+
+Compute Sanitizer synccheck
+barrier and odd-shape checks passed: 1 workers
+barrier and odd-shape checks passed: 3 workers
+barrier and odd-shape checks passed: 68 workers
+barrier and odd-shape checks passed: 136 workers
+AdamW parameters and both moments match for ten steps
+full training checks passed: sequence=1, vocabulary=257
+full training checks passed: sequence=17, vocabulary=257
+full training checks passed: sequence=64, vocabulary=257
+full training checks passed: sequence=256, vocabulary=257
+========= ERROR SUMMARY: 0 errors
+
+Compute Sanitizer memcheck
+barrier and odd-shape checks passed: 1 workers
+barrier and odd-shape checks passed: 3 workers
+barrier and odd-shape checks passed: 68 workers
+barrier and odd-shape checks passed: 136 workers
+AdamW parameters and both moments match for ten steps
+full training checks passed: sequence=1, vocabulary=257
+full training checks passed: sequence=17, vocabulary=257
+full training checks passed: sequence=64, vocabulary=257
+full training checks passed: sequence=256, vocabulary=257
+========= ERROR SUMMARY: 0 errors
