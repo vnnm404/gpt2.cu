@@ -1,21 +1,22 @@
 # gpt2.cu: persistent GPT-2 training
 
-This is the **H100 training-throughput branch**. Benchmarks default to batch 32
-and sequence 128, with larger batches as the optimization target. See the
-[H100 workload plan](benchmarks/H100.md). H100 GPU validation is pending; the
-measurements below are historical RTX 3080 results.
+This is the **H100 training-throughput branch**. GPT-2 forward, loss, backward,
+and AdamW execute in one persistent CUDA kernel. At sequence length 128, measured
+step times are **81.39 ms vs PyTorch's 91.12 ms at batch 32**, and **157.71 ms vs
+171.71 ms at batch 64**. Batch 128 is essentially tied (324.26 vs 327.04 ms).
+A matched 200-step text-training run at batch 64 takes **31.58 s vs 34.06 s**
+for PyTorch. See [H100 measurements and reproduction](benchmarks/H100.md).
 
-GPT-2 forward, mean cross-entropy loss, backward, and AdamW execute in one
-persistent CUDA kernel. Parameters, activations, gradients, and optimizer state
-use **FP32**. GEMMs use ordinary SIMT FP32 arithmetic, not TF32 or mixed precision.
+Parameters, activations, gradients, and optimizer state remain FP32. On Hopper,
+GEMMs decompose each FP32 operand into three BF16 components and compute six
+products with FP32 accumulation, using TMA and WGMMA. This approximates FP32
+arithmetic; it is not bitwise FP32 or ordinary BF16 training. The reference is
+PyTorch eager FP32 with TF32 disabled and fused AdamW. Five full training steps
+pass the existing loss, logits, gradient, and parameter tolerances at each batch.
+These measurements do not compare against PyTorch AMP, torch.compile, or graphs.
 
-The rewritten executor reaches approximately **25 ms per step**, versus **33 ms**
-for the matching PyTorch eager model with fused AdamW on an RTX 3080, at batch 4
-and sequence length 64. See [benchmark methodology](benchmarks/README.md) and the
-recorded measurements in `benchmarks/rtx3080.json` for exact results and scope.
-A matched 200-step text-training run takes **5.00 s**, versus **6.40 s** for
-PyTorch and **5.18 s** for the previous megakernel; see the
-[mini-training results](benchmarks/README.md#mini-training-run).
+[RTX 3080 measurements](benchmarks/README.md) remain historical records of the
+previous SIMT implementation.
 
 ## Run
 
@@ -41,6 +42,8 @@ operation benchmarks, and synchronization validation.
 - `include/gpt2/executor.h`: operation descriptors and host API.
 - `include/gpt2/kernels/gemm.cuh`: inlined CUTLASS SIMT threadblock GEMMs with
   double buffering, reduction partitioning, and an L2-oriented tile order.
+- `include/gpt2/kernels/hopper_gemm.cuh`: operand packing, tensor maps, triple
+  buffered TMA transfers, WGMMA accumulation, and transaction barriers.
 - `include/gpt2/kernels/attention.cuh`: causal attention and backward kernels;
   key/value gradients are gathered without float atomics.
 - `include/gpt2/kernels/elementwise.cuh`: normalization, embeddings, residuals,
@@ -55,7 +58,9 @@ Resident GPU workers share each group's tile space, allowing independent
 backward operations to overlap. Cooperative grid barriers publish completed
 writes between dependent groups. Worker count comes from actual SM count and
 compiled-kernel occupancy; a block is not assumed to have physical SM affinity.
-Even workers with no work participate in every grid barrier.
+Even workers with no work participate in every grid barrier. Hopper packing
+stores use an explicit async-proxy fence before the grid barrier; transaction
+barriers and WGMMA waits protect each shared-memory pipeline stage.
 
 The vocabulary is padded internally to 50,304 rows for layout alignment. Loss
 and logits exposed to the caller still use the original 50,257-token vocabulary;
@@ -76,7 +81,7 @@ print(training.mean_loss.item())     # synchronize only when reporting
 Shapes and tensor addresses are fixed when the program is constructed. Update
 input buffers in place for subsequent batches. The implemented attention head
 width is 64 and sequence lengths are bounded at 256; performance is tuned and
-reported for batch 4, sequence 64, GPT-2 124M. The results do not establish parity
+reported for batches 32, 64, and 128 at sequence 128, GPT-2 124M. The results do not establish parity
 with `torch.compile`, CUDA Graphs, mixed-precision training, or other GPUs/shapes.
 
 The original `src/mk.cu`, `src/train.cu`, layer code, and `tests/test_train*.cu`

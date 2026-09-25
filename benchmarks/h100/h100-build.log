@@ -1,0 +1,6 @@
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /root/gpt2.cu/build-cmake
+[ 50%] Building CUDA object CMakeFiles/gpt2_executor.dir/src/executor.cu.o
+[100%] Linking CUDA shared library libgpt2_executor.so
+[100%] Built target gpt2_executor

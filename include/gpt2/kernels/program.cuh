@@ -6,7 +6,11 @@ namespace gpt2 {
 constexpr int threads = 256;
 constexpr int tile_m = 64;
 constexpr int tile_n = 128;
+#ifdef GPT2_HOPPER
+constexpr int shared_bytes = 112 * 1024;
+#else
 constexpr int shared_bytes = 32 * 1024;
+#endif
 
 __device__ __forceinline__ float warp_sum(float x) {
     for (int d = 16; d; d >>= 1) x += __shfl_xor_sync(0xffffffff, x, d);

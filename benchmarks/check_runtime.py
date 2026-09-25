@@ -36,6 +36,20 @@ def main():
     except RuntimeError as e:
         assert "CUDA error 1" in str(e)
 
+    # Rounding split spans up to a tile must never produce negative K sizes.
+    for reduction in (768, 1031):
+        p = Program(backend)
+        a = torch.randn((67, reduction), device="cuda") * .1
+        b = torch.randn((reduction, 71), device="cuda") * .1
+        out = p.empty((67, 71))
+        p.matmul(a, b, out)
+        p.upload()
+        expected = a @ b
+        for workers in (1, 3, backend.capacity):
+            p.run(workers=workers)
+            torch.testing.assert_close(out, expected, atol=2e-5, rtol=2e-4)
+    print("Nonempty split-K partition checks passed", flush=True)
+
     for offset in (0, 1):
         # Isolate optimizer accuracy from amplified near-zero gradient differences.
         p = Program(backend)

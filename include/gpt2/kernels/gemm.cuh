@@ -3,6 +3,9 @@
 #include "program.cuh"
 #include <cutlass/gemm/kernel/default_gemm.h>
 #include <cutlass/epilogue/thread/linear_combination.h>
+#ifdef GPT2_HOPPER
+#include "hopper_gemm.cuh"
+#endif
 
 namespace gpt2 {
 // CUTLASS supplies an inline threadblock implementation, not a nested kernel
@@ -23,13 +26,19 @@ using CutlassGemm = typename cutlass::gemm::kernel::DefaultGemm<
     float, typename std::conditional<TB, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor>::type, 1,
     float, cutlass::layout::RowMajor, float,
     cutlass::arch::OpClassSimt, cutlass::arch::Sm80,
-    cutlass::gemm::GemmShape<tile_m, tile_n, 8>, cutlass::gemm::GemmShape<32, 32, 8>,
+    cutlass::gemm::GemmShape<tile_m, tile_n, 8>, cutlass::gemm::GemmShape<tile_m / 2, 32, 8>,
     cutlass::gemm::GemmShape<1, 1, 1>,
     cutlass::epilogue::thread::LinearCombination<float, 1, float, float>,
     WorkerSwizzle, 2, false, cutlass::arch::OpMultiplyAdd>::GemmKernel;
 
 template<bool TA, bool TB>
 __device__ __forceinline__ void gemm(const Operation &o, int task, float *s) {
+#if defined(GPT2_HOPPER) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+    if (hopper_eligible(o)) {
+        hopper_gemm(o, task, s);
+        return;
+    }
+#endif
     using Kernel = CutlassGemm<TA, TB>;
     static_assert(Kernel::kThreadCount == threads);
     static_assert(sizeof(typename Kernel::SharedStorage) + 128 <= shared_bytes);
@@ -52,6 +61,9 @@ __device__ __forceinline__ void gemm(const Operation &o, int task, float *s) {
 
 template<bool TA, bool TB>
 int gemm_parameters(const Operation &o, void *buffer) {
+#ifdef GPT2_HOPPER
+    if (hopper_eligible(o)) return hopper_parameters(o, buffer);
+#endif
     using Kernel = CutlassGemm<TA, TB>;
     using LayoutA = typename Kernel::Mma::IteratorA::Layout;
     using LayoutB = typename Kernel::Mma::IteratorB::Layout;

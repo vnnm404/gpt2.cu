@@ -1,0 +1,12 @@
+{
+  "instance_id": 52537329,
+  "gpu": "H100 SXM 80GB",
+  "hourly_usd_including_disk": 1.7444444444444445,
+  "budget_usd": 10,
+  "started_utc": "2026-09-25T05:22:57.103483+00:00",
+  "destroyed_confirmed_utc": "2026-09-25T06:26:59.230936+00:00",
+  "rental_seconds": 3842.1274530887604,
+  "estimated_rental_usd": 1.8617716362189365,
+  "destroyed": true,
+  "note": "Estimate from elapsed rental time and listed hourly price, including 40GB disk; not an invoice. Four-hour automatic destruction guard limited rental cost to approximately $6.98."
+}

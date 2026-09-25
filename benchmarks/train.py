@@ -73,6 +73,7 @@ def main():
         step(0)
     reset()
     torch.cuda.synchronize()
+    torch.cuda.reset_peak_memory_stats()
     start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
     begin = time.perf_counter()
     start.record()
@@ -90,7 +91,9 @@ def main():
                   cuda_version=torch.version.cuda, mode=args.mode, steps=args.steps, batch=args.batch, sequence=args.sequence,
                   gpu=torch.cuda.get_device_name(), torch=torch.__version__,
                   corpus_sha256=hashlib.sha256(raw).hexdigest(), corpus_tokens=len(ids),
-                  initialization='random seed 123, GPT-2 124M', dtype='float32', tf32=False,
+                  initialization='random seed 123, GPT-2 124M', dtype='float32', pytorch_allow_tf32=False,
+                  cuda_gemm=train.backend.gemm if args.mode == 'persistent' else None,
+                  peak_allocated_bytes=torch.cuda.max_memory_allocated(),
                   wall_seconds=elapsed, gpu_seconds=start.elapsed_time(end)/1000,
                   tokens_per_second=args.steps*tokens_per_step/elapsed, losses=losses.tolist(),
                   timing='Includes batch copies, forward, backward, AdamW, loss recording; excludes setup and five reset warmup steps')

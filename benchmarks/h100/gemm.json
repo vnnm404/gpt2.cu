@@ -1,0 +1,176 @@
+[
+  {
+    "shape": [
+      8192,
+      2304,
+      768
+    ],
+    "transpose": [
+      false,
+      true
+    ],
+    "standalone": {
+      "gpu_median_ms": 0.3665439933538437,
+      "wall_median_ms": 0.38099102675914764,
+      "gpu_min_ms": 0.3643200099468231,
+      "iterations": 20
+    },
+    "persistent": {
+      "gpu_median_ms": 0.3936639875173569,
+      "wall_median_ms": 0.40919799357652664,
+      "gpu_min_ms": 0.38784000277519226,
+      "iterations": 20
+    },
+    "torch": {
+      "gpu_median_ms": 0.6646080017089844,
+      "wall_median_ms": 0.6810789927840233,
+      "gpu_min_ms": 0.6621119976043701,
+      "iterations": 20
+    }
+  },
+  {
+    "shape": [
+      8192,
+      768,
+      3072
+    ],
+    "transpose": [
+      false,
+      false
+    ],
+    "standalone": {
+      "gpu_median_ms": 0.6651360094547272,
+      "wall_median_ms": 0.6811153143644333,
+      "gpu_min_ms": 0.6587520241737366,
+      "iterations": 20
+    },
+    "persistent": {
+      "gpu_median_ms": 0.6889120042324066,
+      "wall_median_ms": 0.7037641480565071,
+      "gpu_min_ms": 0.6812480092048645,
+      "iterations": 20
+    },
+    "torch": {
+      "gpu_median_ms": 0.8723520040512085,
+      "wall_median_ms": 0.8889557793736458,
+      "gpu_min_ms": 0.8635200262069702,
+      "iterations": 20
+    }
+  },
+  {
+    "shape": [
+      3072,
+      768,
+      8192
+    ],
+    "transpose": [
+      true,
+      false
+    ],
+    "standalone": {
+      "gpu_median_ms": 0.6349759995937347,
+      "wall_median_ms": 0.6493926048278809,
+      "gpu_min_ms": 0.6297919750213623,
+      "iterations": 20
+    },
+    "persistent": {
+      "gpu_median_ms": 0.6554880142211914,
+      "wall_median_ms": 0.6702281534671783,
+      "gpu_min_ms": 0.6527040004730225,
+      "iterations": 20
+    },
+    "torch": {
+      "gpu_median_ms": 0.797760009765625,
+      "wall_median_ms": 0.8132820948958397,
+      "gpu_min_ms": 0.7934719920158386,
+      "iterations": 20
+    }
+  },
+  {
+    "shape": [
+      8192,
+      50304,
+      768
+    ],
+    "transpose": [
+      false,
+      true
+    ],
+    "standalone": {
+      "gpu_median_ms": 6.925807952880859,
+      "wall_median_ms": 6.954798474907875,
+      "gpu_min_ms": 6.6663360595703125,
+      "iterations": 20
+    },
+    "persistent": {
+      "gpu_median_ms": 7.574480056762695,
+      "wall_median_ms": 7.609259337186813,
+      "gpu_min_ms": 7.174272060394287,
+      "iterations": 20
+    },
+    "torch": {
+      "gpu_median_ms": 12.247759819030762,
+      "wall_median_ms": 12.293809093534946,
+      "gpu_min_ms": 12.026111602783203,
+      "iterations": 20
+    }
+  },
+  {
+    "shape": [
+      8192,
+      768,
+      50304
+    ],
+    "transpose": [
+      false,
+      false
+    ],
+    "standalone": {
+      "gpu_median_ms": 10.640975952148438,
+      "wall_median_ms": 10.69711521267891,
+      "gpu_min_ms": 9.545248031616211,
+      "iterations": 20
+    },
+    "persistent": {
+      "gpu_median_ms": 13.319247722625732,
+      "wall_median_ms": 13.355692848563194,
+      "gpu_min_ms": 12.84937572479248,
+      "iterations": 20
+    },
+    "torch": {
+      "gpu_median_ms": 13.0175199508667,
+      "wall_median_ms": 13.058582320809364,
+      "gpu_min_ms": 13.004672050476074,
+      "iterations": 20
+    }
+  },
+  {
+    "shape": [
+      50304,
+      768,
+      8192
+    ],
+    "transpose": [
+      true,
+      false
+    ],
+    "standalone": {
+      "gpu_median_ms": 9.476959705352783,
+      "wall_median_ms": 9.509626775979996,
+      "gpu_min_ms": 9.444064140319824,
+      "iterations": 20
+    },
+    "persistent": {
+      "gpu_median_ms": 11.588880062103271,
+      "wall_median_ms": 11.626293882727623,
+      "gpu_min_ms": 11.447999954223633,
+      "iterations": 20
+    },
+    "torch": {
+      "gpu_median_ms": 11.900304317474365,
+      "wall_median_ms": 11.937210336327553,
+      "gpu_min_ms": 11.881759643554688,
+      "iterations": 20
+    }
+  }
+]

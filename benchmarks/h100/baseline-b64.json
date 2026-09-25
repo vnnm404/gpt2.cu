@@ -1,0 +1,46 @@
+{
+  "source_sha256": "c14a47d9c9507f776bf4eea6184d774c6939387e4753ce9a9222bb2316ed7e9f",
+  "gpu": "NVIDIA H100 80GB HBM3",
+  "torch": "2.5.1+cu124",
+  "cuda_version": "12.4",
+  "tf32": false,
+  "dtype": "float32",
+  "layers": 12,
+  "cuda_gemm": "cutlass_simt_fp32",
+  "grouped": true,
+  "operations": 435,
+  "stages": 237,
+  "batch": 64,
+  "sequence": 128,
+  "optimizer": "AdamW fused reference",
+  "pytorch_execution": "eager",
+  "resident_worker_capacity": 264,
+  "workers": 264,
+  "mode": "persistent",
+  "checks": [
+    {
+      "step": 1,
+      "loss": 10.979473114013672,
+      "cuda_loss": 10.979475021362305,
+      "worst_gradient_relative_rms": [
+        3.1257759474101476e-06,
+        "transformer.h.2.ln_2.weight"
+      ]
+    }
+  ],
+  "pytorch": {
+    "gpu_median_ms": 171.56101989746094,
+    "wall_median_ms": 171.71615175902843,
+    "gpu_min_ms": 171.52601623535156,
+    "iterations": 5,
+    "tokens_per_second": 47706.636306967455
+  },
+  "cuda": {
+    "gpu_median_ms": 226.25791931152344,
+    "wall_median_ms": 226.41200758516788,
+    "gpu_min_ms": 226.05491638183594,
+    "iterations": 5,
+    "tokens_per_second": 36181.82660616386
+  },
+  "speedup": 0.7582542101487594
+}

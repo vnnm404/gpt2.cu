@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class Code(enum.IntEnum):
-    GEMM, ADD, GELU, GELU_BACKWARD, NORM, NORM_BACKWARD, NORM_PARAMETERS, EMBEDDING, EMBEDDING_BACKWARD, ATTENTION, ATTENTION_BACKWARD, ATTENTION_KV_BACKWARD, CROSS_ENTROPY, SUM_ROWS, ADAMW, CLEAR, ADVANCE, SUM_SPLITS = range(18)
+    GEMM, ADD, GELU, GELU_BACKWARD, NORM, NORM_BACKWARD, NORM_PARAMETERS, EMBEDDING, EMBEDDING_BACKWARD, ATTENTION, ATTENTION_BACKWARD, ATTENTION_KV_BACKWARD, CROSS_ENTROPY, SUM_ROWS, ADAMW, CLEAR, ADVANCE, SUM_SPLITS, PACK = range(19)
 
 
 class Operation(ct.Structure):
@@ -32,7 +32,10 @@ class Backend:
         build.mkdir(exist_ok=True)
         self.gemm = "cutlass_simt_fp32"
         major, minor = torch.cuda.get_device_capability()
-        architecture = f"sm_{major}{minor}"
+        hopper = self.hopper = (major, minor) == (9, 0)
+        architecture = "sm_90a" if hopper else f"sm_{major}{minor}"
+        if hopper:
+            self.gemm = "hopper_tma_wgmma_bf16x6"
         library = build / f"libgpt2_executor_{architecture}.so"
         dependency = build / "cutlass"
         revision = "f7b19de32c5d1f3cedfc735c2849f12b537522ee"
@@ -43,6 +46,8 @@ class Backend:
         if actual != revision:
             raise RuntimeError(f"Expected CUTLASS {revision}, found {actual}")
         extra = ["--expt-relaxed-constexpr", "-I", str(dependency / "include")]
+        if hopper:
+            extra += ["-DGPT2_HOPPER=1", "-lcuda"]
         sources = [ROOT / "src/executor.cu", *ROOT.glob("include/gpt2/kernels/*.cuh"), ROOT / "include/gpt2/executor.h"]
         if not library.exists() or any(p.stat().st_mtime > library.stat().st_mtime for p in sources):
             subprocess.run(["nvcc", "-std=c++17", "-O3", "-lineinfo", f"-arch={architecture}",
@@ -81,9 +86,10 @@ class Program:
         self.labels = []
         self.allocations = []
         self.accesses = []
+        self.pack_workspace = [None, None]
 
-    def empty(self, shape, *, zero=False):
-        out = (torch.zeros if zero else torch.empty)(shape, device="cuda", dtype=torch.float32)
+    def empty(self, shape, *, zero=False, dtype=torch.float32):
+        out = (torch.zeros if zero else torch.empty)(shape, device="cuda", dtype=dtype)
         self.allocations.append(out)
         return out
 
@@ -92,6 +98,8 @@ class Program:
             tiles = (m + 4095) // 4096
         if m < 1 or tiles < 1:
             raise ValueError("Operations require positive work sizes")
+        if any(value > 2**31 - 1 for value in (m, n, k, tiles)):
+            raise ValueError("Operation dimensions exceed the 32-bit indexing limit")
         if any(p is not None and not p.is_contiguous() for p in pointers):
             raise ValueError("Operation tensors must be contiguous")
         self.allocations.extend(p for p in pointers if p is not None)
@@ -108,7 +116,7 @@ class Program:
             Code.EMBEDDING: (3,), Code.EMBEDDING_BACKWARD: (2, 3), Code.ATTENTION: (1, 2),
             Code.ATTENTION_BACKWARD: (3, 4), Code.ATTENTION_KV_BACKWARD: (3,),
             Code.CROSS_ENTROPY: (2, 3), Code.SUM_ROWS: (3,), Code.ADAMW: (0, 2, 3),
-            Code.CLEAR: (0,), Code.ADVANCE: (0,), Code.SUM_SPLITS: (1,),
+            Code.CLEAR: (0,), Code.ADVANCE: (0,), Code.SUM_SPLITS: (1,), Code.PACK: (1,),
         }[code]
         # Treat read/write outputs conservatively as reads too. This permits
         # overlap only when byte ranges are disjoint, including aliased views.
@@ -116,17 +124,42 @@ class Program:
                   if p is not None else None for p in pointers]
         self.accesses.append(([r for r in ranges if r], [ranges[i] for i in writes]))
 
+    def pack(self, value, rows, columns, transpose, slot):
+        if not self.backend.hopper:
+            raise ValueError("Operand packing requires Hopper")
+        count = rows * columns
+        workspace = self.pack_workspace[slot]
+        if workspace is None or workspace.numel() < 3 * count:
+            workspace = self.pack_workspace[slot] = self.empty(3 * count, dtype=torch.bfloat16)
+        packed = workspace[:3 * count]
+        self.emit(Code.PACK, [value, packed], rows, columns, flags=int(transpose),
+                  tiles=((rows + 31) // 32) * ((columns + 31) // 32))
+        return packed
+
     def matmul(self, a, b, out, *, ta=False, tb=False, add=False, bias=None, label="gemm"):
         m, n = out.shape
         k = a.shape[0] if ta else a.shape[1]
         output_tiles = ((m + self.backend.tile_m - 1) // self.backend.tile_m) * ((n + self.backend.tile_n - 1) // self.backend.tile_n)
-        splits = 16 if k > 4096 else 1
-        if k <= 4096 and k >= 768:
-            while output_tiles * splits < self.backend.capacity and splits < 8:
-                splits *= 2
+        splits = 1
+        if k >= 768:
+            # Bound each tensor-core reduction to limit accumulated rounding
+            # error, and expose enough tasks to fill the resident worker grid.
+            while (output_tiles * splits < self.backend.capacity or
+                   (self.backend.hopper and k > 2048 * splits)) and splits < 16:
+                candidate = 2 * splits
+                span = ((k + candidate * 32 - 1) // (candidate * 32)) * 32
+                if (candidate - 1) * span >= k:
+                    break  # Never construct empty or negative CUTLASS partitions.
+                splits = candidate
+        if splits * m * n > 2**31 - 1:
+            raise ValueError("GEMM output workspace exceeds the 32-bit indexing limit")
         temp = self.empty((splits, m, n)) if splits > 1 else out
+        packed = self.backend.hopper and m % 4 == n % 4 == 0 and k % 8 == 0
+        if packed:
+            a = self.pack(a, m, k, ta, 0)
+            b = self.pack(b, n, k, not tb, 1)
         self.emit(Code.GEMM, [a, b, temp, bias if splits == 1 else None], m, n, k,
-                  int(ta) | (int(tb) << 1) | (int(add and splits == 1) << 2) |
+                  int(ta) | (int(tb) << 1) | (int(add and splits == 1) << 2) | (int(packed) << 3) |
                   (splits << 8),
                   tiles=output_tiles * splits, label=label)
         if splits > 1:
@@ -188,6 +221,9 @@ class Training(Program):
         params = list(reference.named_parameters())
         vocab = reference.config.vocab_size
         padded_vocab = (vocab + 63) // 64 * 64
+        if backend.hopper:
+            self.pack_workspace = [self.empty(3 * B * T * padded_vocab, dtype=torch.bfloat16),
+                                   self.empty(3 * max(padded_vocab * C, B * T * 4 * C), dtype=torch.bfloat16)]
         assert all(p.dtype == torch.float32 for _, p in params)
         total = sum(p.numel() for _, p in params) + (padded_vocab - vocab) * C
         self.parameters = self.empty(total)

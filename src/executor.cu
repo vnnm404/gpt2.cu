@@ -13,6 +13,9 @@ __device__ __forceinline__ void execute(const Operation &o, int tile, float *s) 
             case 3: gemm<true, true>(o, tile, s); break;
         }
     } else switch (o.code) {
+#if defined(GPT2_HOPPER) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+        case Code::pack: hopper_pack(o, tile, s); break;
+#endif
         case Code::adamw: adamw(o, tile); break;
         case Code::norm: norm(o, tile, s); break;
         case Code::norm_backward: norm_backward(o, tile, s); break;
@@ -28,6 +31,9 @@ __device__ __forceinline__ void execute(const Operation &o, int tile, float *s) 
 __global__ __launch_bounds__(256, 2) void standalone(Operation op) {
     extern __shared__ float scratch[];
     execute(op, blockIdx.x, scratch);
+#if defined(GPT2_HOPPER) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+    if (op.code == Code::pack) asm volatile("fence.proxy.async.global;" ::: "memory");
+#endif
 }
 
 __global__ __launch_bounds__(256, 2) void persistent(const Operation *ops, int count) {
@@ -36,7 +42,11 @@ __global__ __launch_bounds__(256, 2) void persistent(const Operation *ops, int c
     for (int i = 0; i < count;) {
         int end = min(count, i + max(1, ops[i].group));
         int tiles = 0;
-        for (int j = i; j < end; ++j) tiles += ops[j].tiles;
+        bool publishes_tma_input = false;
+        for (int j = i; j < end; ++j) {
+            tiles += ops[j].tiles;
+            publishes_tma_input |= ops[j].code == Code::pack;
+        }
         // All workers participate, even when there are fewer tiles than blocks.
         // A stage can contain independent operations. Workers share the entire
         // tile space, so short bias/reduction work overlaps longer GEMMs.
@@ -47,6 +57,11 @@ __global__ __launch_bounds__(256, 2) void persistent(const Operation *ops, int c
             execute(op, tile, scratch);
             __syncthreads();
         }
+#if defined(GPT2_HOPPER) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+        // Generic global stores must be published to TMA's async proxy before
+        // the grid barrier allows any consumer to issue its tensor-map loads.
+        if (publishes_tma_input) asm volatile("fence.proxy.async.global;" ::: "memory");
+#endif
         grid.sync(); // Publishes all tensor writes before the next operation.
         i = end;
     }
@@ -65,6 +80,10 @@ extern "C" int gpt2_occupancy(int *workers) {
     if (e != cudaSuccess) return e;
     if (device == cached_device) { *workers = cached_capacity; return cudaSuccess; }
     if ((e = cudaGetDeviceProperties(&prop, device)) != cudaSuccess) return e;
+    if ((e = cudaFuncSetAttribute(gpt2::persistent, cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                  gpt2::shared_bytes)) != cudaSuccess) return e;
+    if ((e = cudaFuncSetAttribute(gpt2::standalone, cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                  gpt2::shared_bytes)) != cudaSuccess) return e;
     if (!prop.cooperativeLaunch) return cudaErrorNotSupported;
     if ((e = cudaOccupancyMaxActiveBlocksPerMultiprocessor(
             &active, gpt2::persistent, gpt2::threads, gpt2::shared_bytes)) != cudaSuccess) return e;
@@ -87,6 +106,11 @@ extern "C" int gpt2_launch(const gpt2::Operation *device_ops, int count,
 
 extern "C" int gpt2_operation(const gpt2::Operation *host_op, cudaStream_t stream) {
     if (host_op->tiles < 1) return cudaErrorInvalidValue;
+#ifdef GPT2_HOPPER
+    int capacity;
+    int e = gpt2_occupancy(&capacity); // Configures opt-in shared memory on first use.
+    if (e) return e;
+#endif
     gpt2::standalone<<<host_op->tiles, gpt2::threads, gpt2::shared_bytes, stream>>>(*host_op);
     return cudaGetLastError();
 }

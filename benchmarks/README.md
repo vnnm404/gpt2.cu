@@ -1,3 +1,6 @@
+Current H100 results are in [H100.md](H100.md). The RTX 3080 measurements below
+are historical and were collected before the Hopper implementation.
+
 # RTX 3080 benchmark and validation
 
 Recorded result: **25.08 ms** for the persistent step versus **32.74 ms** for

@@ -1,0 +1,105 @@
+/root/gpt2.cu/scripts/llm.py:17: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import ZeroRedundancyOptimizer
+/root/gpt2.cu/scripts/llm.py:17: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import ZeroRedundancyOptimizer
+Saved reference step 1, loss=10.97637749
+Saved reference step 2, loss=10.74867058
+Saved reference step 3, loss=10.43542099
+Saved reference step 4, loss=10.42816830
+Saved reference step 5, loss=10.27816486
+/root/gpt2.cu/scripts/llm.py:17: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import ZeroRedundancyOptimizer
+GPU=NVIDIA H100 80GB HBM3 resident worker capacity=264
+765 operations in 444 stages; 124475904 parameter slots
+{"step": 1, "loss": 10.976377487182617, "cuda_loss": 10.97637939453125, "worst_gradient_relative_rms": [1.2547026926768012e-05, "transformer.h.8.ln_1.bias"]}
+{"step": 2, "loss": 10.74867057800293, "cuda_loss": 10.748671531677246, "worst_gradient_relative_rms": [4.8827660066308454e-05, "transformer.h.3.attn.c_attn.weight"]}
+{"step": 3, "loss": 10.435420989990234, "cuda_loss": 10.435418128967285, "worst_gradient_relative_rms": [6.806453893659636e-05, "transformer.h.7.ln_1.weight"]}
+{"step": 4, "loss": 10.428168296813965, "cuda_loss": 10.428165435791016, "worst_gradient_relative_rms": [6.80731245665811e-05, "transformer.h.1.ln_1.weight"]}
+{"step": 5, "loss": 10.278164863586426, "cuda_loss": 10.278162956237793, "worst_gradient_relative_rms": [7.927711703814566e-05, "transformer.h.4.ln_2.weight"]}
+{
+  "source_sha256": "8125d4f53a97d9060a950b86e1bb615b2bb17cfa79ccdb3926178d3ebb88bccb",
+  "gpu": "NVIDIA H100 80GB HBM3",
+  "torch": "2.5.1+cu124",
+  "cuda_version": "12.4",
+  "pytorch_allow_tf32": false,
+  "dtype": "float32",
+  "layers": 12,
+  "compute_capability": [
+    9,
+    0
+  ],
+  "cuda_gemm": "hopper_tma_wgmma_bf16x6",
+  "grouped": true,
+  "operations": 765,
+  "stages": 444,
+  "batch": 128,
+  "sequence": 128,
+  "optimizer": "AdamW fused reference",
+  "pytorch_execution": "eager",
+  "resident_worker_capacity": 264,
+  "workers": 264,
+  "mode": "persistent",
+  "isolated_processes": true,
+  "checks": [
+    {
+      "step": 1,
+      "loss": 10.976377487182617,
+      "cuda_loss": 10.97637939453125,
+      "worst_gradient_relative_rms": [
+        1.2547026926768012e-05,
+        "transformer.h.8.ln_1.bias"
+      ]
+    },
+    {
+      "step": 2,
+      "loss": 10.74867057800293,
+      "cuda_loss": 10.748671531677246,
+      "worst_gradient_relative_rms": [
+        4.8827660066308454e-05,
+        "transformer.h.3.attn.c_attn.weight"
+      ]
+    },
+    {
+      "step": 3,
+      "loss": 10.435420989990234,
+      "cuda_loss": 10.435418128967285,
+      "worst_gradient_relative_rms": [
+        6.806453893659636e-05,
+        "transformer.h.7.ln_1.weight"
+      ]
+    },
+    {
+      "step": 4,
+      "loss": 10.428168296813965,
+      "cuda_loss": 10.428165435791016,
+      "worst_gradient_relative_rms": [
+        6.80731245665811e-05,
+        "transformer.h.1.ln_1.weight"
+      ]
+    },
+    {
+      "step": 5,
+      "loss": 10.278164863586426,
+      "cuda_loss": 10.278162956237793,
+      "worst_gradient_relative_rms": [
+        7.927711703814566e-05,
+        "transformer.h.4.ln_2.weight"
+      ]
+    }
+  ],
+  "pytorch": {
+    "gpu_median_ms": 327.04400634765625,
+    "wall_median_ms": 327.171528711915,
+    "gpu_min_ms": 326.8755798339844,
+    "iterations": 50,
+    "tokens_per_second": 50077.70714189081
+  },
+  "cuda": {
+    "gpu_median_ms": 324.2604522705078,
+    "wall_median_ms": 324.3675231933594,
+    "gpu_min_ms": 322.8446044921875,
+    "iterations": 50,
+    "tokens_per_second": 50510.605496818804
+  },
+  "speedup": 1.0085843156563117
+}

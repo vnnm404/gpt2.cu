@@ -149,6 +149,14 @@ __device__ __forceinline__ void sum_rows(const Operation &o, int tile, float *s)
     }
 }
 
+__device__ __forceinline__ float softmax_exp(float x) {
+#ifdef GPT2_HOPPER
+    return __expf(x);
+#else
+    return expf(x);
+#endif
+}
+
 // Stable log-sum-exp loss and its logits gradient, one block per token.
 __device__ __forceinline__ void cross_entropy(const Operation &o, int row, float *s) {
     float mx = -INFINITY, sum = 0;
@@ -156,11 +164,12 @@ __device__ __forceinline__ void cross_entropy(const Operation &o, int row, float
     const float *x = o.p[0] + row * o.n;
     for (int c = threadIdx.x; c < vocab; c += threads) mx = fmaxf(mx, x[c]);
     mx = reduce<true>(mx, s);
-    for (int c = threadIdx.x; c < vocab; c += threads) sum += expf(x[c] - mx);
+    for (int c = threadIdx.x; c < vocab; c += threads) sum += softmax_exp(x[c] - mx);
     sum = reduce(sum, s);
+    float inverse_sum = 1.f / sum, inverse_rows = 1.f / o.m;
     int target = reinterpret_cast<const int *>(o.p[1])[row];
     if (threadIdx.x == 0) o.p[3][row] = logf(sum) + mx - x[target];
     for (int c = threadIdx.x; c < o.n; c += threads)
-        o.p[2][row * o.n + c] = c < vocab ? (expf(x[c] - mx) / sum - float(c == target)) / o.m : 0.f;
+        o.p[2][row * o.n + c] = c < vocab ? (softmax_exp(x[c] - mx) * inverse_sum - float(c == target)) * inverse_rows : 0.f;
 }
 } // namespace gpt2

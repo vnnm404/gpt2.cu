@@ -5,10 +5,12 @@ namespace gpt2 {
 enum class Code : int { gemm, add, gelu, gelu_backward, norm, norm_backward,
                        norm_parameters, embedding, embedding_backward,
                        attention, attention_backward, attention_kv_backward,
-                       cross_entropy, sum_rows, adamw, clear, advance, sum_splits };
+                       cross_entropy, sum_rows, adamw, clear, advance, sum_splits, pack };
 
-// Device pointers are owned by the caller. GEMM flags: transpose A/B, add C;
-// bits 8+ hold the reduction partition count. group counts independent operations
+// Device storage is owned by the caller; token and packed operand pointers
+// are interpreted as int32 and BF16 respectively. GEMM flags: transpose A/B, add C;
+// bit 3 marks three-plane BF16 operands on Hopper (otherwise operands are FP32).
+// Bits 8+ hold the reduction partition count. group counts independent operations
 // in a stage; only the first operation's group field is used by the executor.
 struct Operation {
     Code code;

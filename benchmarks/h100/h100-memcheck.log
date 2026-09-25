@@ -1,0 +1,8 @@
+========= COMPUTE-SANITIZER
+Explicit FP32 descriptor fallback passed
+TMA/WGMMA checks passed: 64x128x32
+TMA/WGMMA checks passed: 68x132x40
+TMA/WGMMA checks passed: 128x256x96
+TMA/WGMMA checks passed: 68x132x1032
+TMA/WGMMA checks passed: 64x128x8192
+========= ERROR SUMMARY: 0 errors

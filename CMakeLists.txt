@@ -23,6 +23,10 @@ if(NOT EXISTS "${CUTLASS_ROOT}/include/cutlass/cutlass.h")
 endif()
 
 add_library(gpt2_executor SHARED src/executor.cu)
+if(CMAKE_CUDA_ARCHITECTURES MATCHES "90a")
+  target_compile_definitions(gpt2_executor PRIVATE GPT2_HOPPER=1)
+  target_link_libraries(gpt2_executor PRIVATE cuda)
+endif()
 target_include_directories(gpt2_executor PRIVATE include "${CUTLASS_ROOT}/include")
 target_compile_options(gpt2_executor PRIVATE
   $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr;-lineinfo>)

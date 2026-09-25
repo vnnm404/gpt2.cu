@@ -1,0 +1,13 @@
+/root/gpt2.cu/scripts/llm.py:17: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import ZeroRedundancyOptimizer
+barrier and odd-shape checks passed: 1 workers
+barrier and odd-shape checks passed: 3 workers
+barrier and odd-shape checks passed: 132 workers
+barrier and odd-shape checks passed: 264 workers
+Nonempty split-K partition checks passed
+AdamW parameters and both moments match for ten steps
+AdamW parameters and both moments match for ten steps
+full training checks passed: sequence=1, vocabulary=257
+full training checks passed: sequence=17, vocabulary=257
+full training checks passed: sequence=64, vocabulary=257
+full training checks passed: sequence=256, vocabulary=257
