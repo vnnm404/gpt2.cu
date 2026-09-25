@@ -13,9 +13,10 @@ __device__ __forceinline__ void execute(const Operation &o, int tile, float *s) 
             case 3: gemm<true, true>(o, tile, s); break;
         }
     } else switch (o.code) {
+        case Code::adamw: adamw(o, tile); break;
         case Code::norm: norm(o, tile, s); break;
         case Code::norm_backward: norm_backward(o, tile, s); break;
-        case Code::norm_parameters: case Code::sum_rows: sum_rows(o, tile); break;
+        case Code::norm_parameters: case Code::sum_rows: sum_rows(o, tile, s); break;
         case Code::attention: attention(o, tile, s); break;
         case Code::attention_backward: attention_backward(o, tile, s); break;
         case Code::attention_kv_backward: attention_kv_backward(o, tile); break;
@@ -51,6 +52,8 @@ __global__ __launch_bounds__(256, 2) void persistent(const Operation *ops, int c
     }
 }
 } // namespace gpt2
+
+extern "C" int gpt2_gemm_tile_n() { return gpt2::tile_n; }
 
 extern "C" int gpt2_gemm_tile_m() { return gpt2::tile_m; }
 

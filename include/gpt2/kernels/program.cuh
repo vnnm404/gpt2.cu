@@ -4,7 +4,8 @@
 
 namespace gpt2 {
 constexpr int threads = 256;
-constexpr int tile_m = 128;
+constexpr int tile_m = 64;
+constexpr int tile_n = 128;
 constexpr int shared_bytes = 32 * 1024;
 
 __device__ __forceinline__ float warp_sum(float x) {

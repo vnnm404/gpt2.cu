@@ -4,10 +4,13 @@ GPT-2 forward, mean cross-entropy loss, backward, and AdamW execute in one
 persistent CUDA kernel. Parameters, activations, gradients, and optimizer state
 use **FP32**. GEMMs use ordinary SIMT FP32 arithmetic, not TF32 or mixed precision.
 
-The rewritten executor reaches approximately **26 ms per step**, versus **33 ms**
+The rewritten executor reaches approximately **25 ms per step**, versus **33 ms**
 for the matching PyTorch eager model with fused AdamW on an RTX 3080, at batch 4
 and sequence length 64. See [benchmark methodology](benchmarks/README.md) and the
 recorded measurements in `benchmarks/rtx3080.json` for exact results and scope.
+A matched 200-step text-training run takes **5.00 s**, versus **6.40 s** for
+PyTorch and **5.18 s** for the previous megakernel; see the
+[mini-training results](benchmarks/README.md#mini-training-run).
 
 ## Run
 

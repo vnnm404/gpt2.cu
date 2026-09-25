@@ -1,5 +1,5 @@
 {
-  "source_sha256": "89246187b207cd5f7be1a2658c4152689c4eec042d9d4a65e15a60c020873f6c",
+  "source_sha256": "9e9381fad28fa7c3ea732fba4b09620abc45c9e9d745995981cee272146e7678",
   "gpu": "NVIDIA GeForce RTX 3080",
   "torch": "2.5.1+cu124",
   "cuda_version": "12.4",
@@ -8,8 +8,8 @@
   "layers": 12,
   "cuda_gemm": "cutlass_simt_fp32",
   "grouped": true,
-  "operations": 482,
-  "stages": 333,
+  "operations": 506,
+  "stages": 357,
   "batch": 4,
   "sequence": 64,
   "optimizer": "AdamW fused reference",
@@ -23,7 +23,7 @@
       "loss": 10.98294448852539,
       "cuda_loss": 10.982942581176758,
       "worst_gradient_relative_rms": [
-        1.7195383179569035e-06,
+        1.7207970586241572e-06,
         "transformer.h.3.ln_2.weight"
       ]
     },
@@ -32,16 +32,16 @@
       "loss": 9.52655029296875,
       "cuda_loss": 9.526552200317383,
       "worst_gradient_relative_rms": [
-        2.13864568650024e-05,
+        2.1391517293523066e-05,
         "transformer.h.1.mlp.c_fc.weight"
       ]
     },
     {
       "step": 3,
       "loss": 8.431352615356445,
-      "cuda_loss": 8.431343078613281,
+      "cuda_loss": 8.431342124938965,
       "worst_gradient_relative_rms": [
-        2.897764352383092e-05,
+        2.8966345780645497e-05,
         "transformer.h.7.mlp.c_fc.weight"
       ]
     },
@@ -50,31 +50,31 @@
       "loss": 8.02230453491211,
       "cuda_loss": 8.02230453491211,
       "worst_gradient_relative_rms": [
-        3.319111783639528e-05,
+        3.321928670629859e-05,
         "transformer.h.2.ln_2.weight"
       ]
     },
     {
       "step": 5,
       "loss": 6.6396307945251465,
-      "cuda_loss": 6.639619827270508,
+      "cuda_loss": 6.639617919921875,
       "worst_gradient_relative_rms": [
-        3.811894202954136e-05,
+        3.81644131266512e-05,
         "transformer.h.7.attn.c_attn.bias"
       ]
     }
   ],
   "pytorch": {
-    "gpu_median_ms": 32.739328384399414,
-    "wall_median_ms": 32.76353300043411,
-    "gpu_min_ms": 32.42496109008789,
-    "iterations": 50
+    "gpu_median_ms": 32.9431037902832,
+    "wall_median_ms": 32.975295999676746,
+    "gpu_min_ms": 32.712703704833984,
+    "iterations": 30
   },
   "cuda": {
-    "gpu_median_ms": 25.0828800201416,
-    "wall_median_ms": 25.10402499956399,
-    "gpu_min_ms": 25.030656814575195,
-    "iterations": 50
+    "gpu_median_ms": 26.066944122314453,
+    "wall_median_ms": 26.093022999702953,
+    "gpu_min_ms": 25.90719985961914,
+    "iterations": 30
   },
-  "speedup": 1.3052459828420688
+  "speedup": 1.2637884838247093
 }

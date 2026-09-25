@@ -1,22 +1,31 @@
-RTX 3080 validation, CUDA 12.4 / PyTorch 2.5.1
-CMake Release build: new executor and all legacy targets passed.
+Final core source SHA-256: 89246187b207cd5f7be1a2658c4152689c4eec042d9d4a65e15a60c020873f6c
 
-Runtime checks
+Full model: five-step loss/logit/all-gradient/all-parameter comparison passed; see rtx3080.json.
+Mini training: three 200-step runs per engine; see rtx3080-training.json.
+
+runtime:
+/root/gpt2.cu/scripts/llm.py:17: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import ZeroRedundancyOptimizer
 barrier and odd-shape checks passed: 1 workers
 barrier and odd-shape checks passed: 3 workers
 barrier and odd-shape checks passed: 68 workers
 barrier and odd-shape checks passed: 136 workers
+AdamW parameters and both moments match for ten steps
 AdamW parameters and both moments match for ten steps
 full training checks passed: sequence=1, vocabulary=257
 full training checks passed: sequence=17, vocabulary=257
 full training checks passed: sequence=64, vocabulary=257
 full training checks passed: sequence=256, vocabulary=257
 
-Compute Sanitizer synccheck
+synccheck:
+========= COMPUTE-SANITIZER
+/root/gpt2.cu/scripts/llm.py:17: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import ZeroRedundancyOptimizer
 barrier and odd-shape checks passed: 1 workers
 barrier and odd-shape checks passed: 3 workers
 barrier and odd-shape checks passed: 68 workers
 barrier and odd-shape checks passed: 136 workers
+AdamW parameters and both moments match for ten steps
 AdamW parameters and both moments match for ten steps
 full training checks passed: sequence=1, vocabulary=257
 full training checks passed: sequence=17, vocabulary=257
@@ -24,11 +33,15 @@ full training checks passed: sequence=64, vocabulary=257
 full training checks passed: sequence=256, vocabulary=257
 ========= ERROR SUMMARY: 0 errors
 
-Compute Sanitizer memcheck
+memcheck:
+========= COMPUTE-SANITIZER
+/root/gpt2.cu/scripts/llm.py:17: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import ZeroRedundancyOptimizer
 barrier and odd-shape checks passed: 1 workers
 barrier and odd-shape checks passed: 3 workers
 barrier and odd-shape checks passed: 68 workers
 barrier and odd-shape checks passed: 136 workers
+AdamW parameters and both moments match for ten steps
 AdamW parameters and both moments match for ten steps
 full training checks passed: sequence=1, vocabulary=257
 full training checks passed: sequence=17, vocabulary=257

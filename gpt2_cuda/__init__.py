@@ -49,6 +49,7 @@ class Backend:
                             *extra], check=True)
         self.lib = ct.CDLL(str(library))
         self.tile_m = self.lib.gpt2_gemm_tile_m()
+        self.tile_n = self.lib.gpt2_gemm_tile_n()
         self.lib.gpt2_operation.argtypes = [ct.POINTER(Operation), ct.c_void_p]
         self.lib.gpt2_launch.argtypes = [ct.c_void_p, ct.c_int, ct.c_int, ct.c_void_p]
         self.lib.gpt2_occupancy.argtypes = [ct.POINTER(ct.c_int)]
@@ -116,7 +117,7 @@ class Program:
     def matmul(self, a, b, out, *, ta=False, tb=False, add=False, bias=None, label="gemm"):
         m, n = out.shape
         k = a.shape[0] if ta else a.shape[1]
-        output_tiles = ((m + self.backend.tile_m - 1) // self.backend.tile_m) * ((n + 63) // 64)
+        output_tiles = ((m + self.backend.tile_m - 1) // self.backend.tile_m) * ((n + self.backend.tile_n - 1) // self.backend.tile_n)
         splits = 16 if k > 4096 else 1
         if k <= 4096 and k >= 768:
             while output_tiles * splits < self.backend.capacity and splits < 8:
@@ -236,7 +237,7 @@ class Training(Program):
                 self.matmul(dy, x, self.output_gradient if tied else self.weight_grads[wn], ta=True, label=name + ".dw")
                 if bias is not None:
                     self.emit(Code.SUM_ROWS, [dy, None, None, self.weight_grads[name + ".bias"]],
-                              B * T, w.shape[0], tiles=(w.shape[0] + 255) // 256)
+                              B * T, w.shape[0], tiles=(w.shape[0] + 31) // 32)
             self.tape.append(backward)
             return out
 
@@ -251,7 +252,7 @@ class Training(Program):
                           dx if x.data_ptr() in self.written else None], B * T, C, tiles=B * T)
                 self.written.add(x.data_ptr())
                 self.emit(Code.NORM_PARAMETERS, [dy, x, stats, self.weight_grads[name + ".bias"],
-                          self.weight_grads[name + ".weight"]], B * T, C, tiles=(C + 255) // 256)
+                          self.weight_grads[name + ".weight"]], B * T, C, tiles=(C + 31) // 32)
             self.tape.append(backward)
             return out
 
@@ -261,7 +262,12 @@ class Training(Program):
 
             def backward():
                 accumulate(x, gradient(out))
-                accumulate(y, gradient(out))
+                # The linear branch consumes this gradient before the residual
+                # branch accumulates into its separate buffer. Reuse the input
+                # gradient rather than launching a copy for the linear output.
+                assert y.data_ptr() not in self.derivatives
+                self.derivatives[y.data_ptr()] = gradient(out)
+                self.written.add(y.data_ptr())
             self.tape.append(backward)
             return out
 

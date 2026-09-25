@@ -5,6 +5,44 @@ namespace gpt2 {
 __device__ __forceinline__ float gelu_value(float x) {
     return 0.5f * x * (1.f + tanhf(0.7978845608f * x * (1.f + 0.044715f * x * x)));
 }
+// Vector loads/stores amortize address generation for the bandwidth-bound
+// optimizer. Unaligned user buffers and tails retain a scalar path.
+__device__ __forceinline__ void adamw(const Operation &o, int tile) {
+    int first = tile * 4096, end = min(o.m, first + 4096);
+    bool aligned = true;
+    for (int p = 0; p < 4; ++p) aligned &= (reinterpret_cast<uintptr_t>(o.p[p]) & 15) == 0;
+    float correction1 = o.p[4][1], correction2 = o.p[4][2];
+    for (int i = first + threadIdx.x * 4; i < end; i += threads * 4) {
+        if (aligned && i + 3 < end) {
+            float4 p = *reinterpret_cast<float4 *>(o.p[0] + i);
+            float4 g = *reinterpret_cast<float4 *>(o.p[1] + i);
+            float4 m = *reinterpret_cast<float4 *>(o.p[2] + i);
+            float4 v = *reinterpret_cast<float4 *>(o.p[3] + i);
+            #pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                float &pj = reinterpret_cast<float *>(&p)[j];
+                float gj = reinterpret_cast<float *>(&g)[j];
+                float &mj = reinterpret_cast<float *>(&m)[j];
+                float &vj = reinterpret_cast<float *>(&v)[j];
+                mj = .9f * mj + .1f * gj;
+                vj = .999f * vj + .001f * gj * gj;
+                pj = pj * (1.f - o.scalar[0] * o.scalar[1]) -
+                    o.scalar[0] * (mj / correction1) / (sqrtf(vj / correction2) + 1e-8f);
+            }
+            *reinterpret_cast<float4 *>(o.p[0] + i) = p;
+            *reinterpret_cast<float4 *>(o.p[2] + i) = m;
+            *reinterpret_cast<float4 *>(o.p[3] + i) = v;
+        } else for (int j = i; j < min(i + 4, end); ++j) {
+            float g = o.p[1][j];
+            float m = .9f * o.p[2][j] + .1f * g;
+            float v = .999f * o.p[3][j] + .001f * g * g;
+            o.p[2][j] = m; o.p[3][j] = v;
+            o.p[0][j] = o.p[0][j] * (1.f - o.scalar[0] * o.scalar[1]) -
+                o.scalar[0] * (m / correction1) / (sqrtf(v / correction2) + 1e-8f);
+        }
+    }
+}
+
 __device__ __forceinline__ void elementwise(const Operation &o, int tile) {
     int begin = tile * 4096 + threadIdx.x;
     for (int i = begin; i < min(o.m, (tile + 1) * 4096); i += threads) {
@@ -47,17 +85,6 @@ __device__ __forceinline__ void elementwise(const Operation &o, int tile) {
             atomicAdd(o.p[3] + (r % o.k) * o.n + c, o.p[1][i]);
             break;
         }
-        case Code::adamw: {
-            float g = o.p[1][i];
-            float m = 0.9f * o.p[2][i] + 0.1f * g;
-            float v = 0.999f * o.p[3][i] + 0.001f * g * g;
-            o.p[2][i] = m;
-            o.p[3][i] = v;
-            // scalar: learning rate, weight decay, first/second bias correction.
-            o.p[0][i] = o.p[0][i] * (1.f - o.scalar[0] * o.scalar[1]) -
-                o.scalar[0] * (m / o.p[4][1]) / (sqrtf(v / o.p[4][2]) + 1e-8f);
-            break;
-        }
         default: break;
         }
     }
@@ -95,18 +122,31 @@ __device__ __forceinline__ void norm_backward(const Operation &o, int row, float
     }
 }
 
-__device__ __forceinline__ void sum_rows(const Operation &o, int tile) {
-    int c = tile * threads + threadIdx.x;
-    if (c >= o.n) return;
+// Eight warps cooperate on each 32-column stripe. Parallelizing rows keeps
+// narrow bias/LayerNorm reductions from running on only three SMs.
+__device__ __forceinline__ void sum_rows(const Operation &o, int tile, float *s) {
+    int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+    int c = tile * 32 + lane;
     float a = 0, b = 0;
-    for (int r = 0; r < o.m; ++r) {
+    if (c < o.n) for (int r = warp; r < o.m; r += 8) {
         float g = o.p[0][r * o.n + c];
         a += g;
         if (o.code == Code::norm_parameters)
             b += g * (o.p[1][r * o.n + c] - o.p[2][r * 2]) * o.p[2][r * 2 + 1];
     }
-    o.p[3][c] = a * (o.scalar[0] == 0.f ? 1.f : o.scalar[0]);
-    if (o.code == Code::norm_parameters) o.p[4][c] = b;
+    s[threadIdx.x] = a;
+    s[threads + threadIdx.x] = b;
+    __syncthreads();
+    if (warp == 0 && c < o.n) {
+        a = b = 0;
+        #pragma unroll
+        for (int w = 0; w < 8; ++w) {
+            a += s[w * 32 + lane];
+            b += s[threads + w * 32 + lane];
+        }
+        o.p[3][c] = a * (o.scalar[0] == 0.f ? 1.f : o.scalar[0]);
+        if (o.code == Code::norm_parameters) o.p[4][c] = b;
+    }
 }
 
 // Stable log-sum-exp loss and its logits gradient, one block per token.

@@ -21,6 +21,7 @@ static_assert(sizeof(Operation) == 112);
 
 extern "C" {
 int gpt2_gemm_tile_m();
+int gpt2_gemm_tile_n();
 int gpt2_occupancy(int *workers);
 int gpt2_gemm_parameters(const gpt2::Operation *op, void *host_buffer);
 int gpt2_operation(const gpt2::Operation *host_op, cudaStream_t stream);

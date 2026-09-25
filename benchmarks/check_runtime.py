@@ -36,26 +36,27 @@ def main():
     except RuntimeError as e:
         assert "CUDA error 1" in str(e)
 
-    # Isolate optimizer accuracy from amplified near-zero gradient differences.
-    p = Program(backend)
-    parameter = p.empty(4097)
-    parameter.normal_()
-    reference = torch.nn.Parameter(parameter.clone())
-    gradient = p.empty(4097)
-    moment, variance, clock = p.empty(4097, zero=True), p.empty(4097, zero=True), p.empty(3, zero=True)
-    p.emit(Code.ADVANCE, [clock], 1)
-    p.emit(Code.ADAMW, [parameter, gradient, moment, variance, clock], 4097, scalars=(1e-4, 0.01))
-    p.upload()
-    opt = torch.optim.AdamW([reference], lr=1e-4, weight_decay=0.01, fused=True)
-    for _ in range(10):
-        gradient.normal_()
-        reference.grad = gradient.clone()
-        opt.step()
-        p.run()
-        torch.testing.assert_close(parameter, reference, atol=2e-6, rtol=1e-6)
-        torch.testing.assert_close(moment, opt.state[reference]["exp_avg"], atol=2e-7, rtol=2e-6)
-        torch.testing.assert_close(variance, opt.state[reference]["exp_avg_sq"], atol=2e-7, rtol=2e-6)
-    print("AdamW parameters and both moments match for ten steps", flush=True)
+    for offset in (0, 1):
+        # Isolate optimizer accuracy from amplified near-zero gradient differences.
+        p = Program(backend)
+        parameter = p.empty(4098)[offset:offset + 4097]
+        parameter.normal_()
+        reference = torch.nn.Parameter(parameter.clone())
+        gradient = p.empty(4098)[offset:offset + 4097]
+        moment, variance, clock = p.empty(4097, zero=True), p.empty(4097, zero=True), p.empty(3, zero=True)
+        p.emit(Code.ADVANCE, [clock], 1)
+        p.emit(Code.ADAMW, [parameter, gradient, moment, variance, clock], 4097, scalars=(1e-4, 0.01))
+        p.upload()
+        opt = torch.optim.AdamW([reference], lr=1e-4, weight_decay=0.01, fused=True)
+        for _ in range(10):
+            gradient.normal_()
+            reference.grad = gradient.clone()
+            opt.step()
+            p.run()
+            torch.testing.assert_close(parameter, reference, atol=2e-6, rtol=1e-6)
+            torch.testing.assert_close(moment, opt.state[reference]["exp_avg"], atol=2e-7, rtol=2e-6)
+            torch.testing.assert_close(variance, opt.state[reference]["exp_avg_sq"], atol=2e-7, rtol=2e-6)
+        print("AdamW parameters and both moments match for ten steps", flush=True)
 
     # Exercise every operation, padded vocabulary, and partial attention warps.
     for sequence in (1, 17, 64, 256):
