@@ -22,8 +22,6 @@ cmake --build build -j
 
 `CUTLASS_ROOT` can point to an existing checkout. The Python loader expects the
 pinned checkout at `build/cutlass` and verifies its revision before building.
-To also compile the original library and drivers, configure with
-`-DGPT2_BUILD_LEGACY=ON`. Those drivers retain their original binary model inputs.
 
 Run validation on the GPU host:
 
