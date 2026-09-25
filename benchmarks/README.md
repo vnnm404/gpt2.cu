@@ -45,8 +45,8 @@ and run order. The reference uses PyTorch 2.5.1 with CUDA 12.4.
 
 ```sh
 curl -L https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt -o /tmp/shakespeare.txt
-uv run --with tiktoken python benchmarks/train.py --text /tmp/shakespeare.txt --mode pytorch --steps 200 --output /tmp/pytorch-training.json
-uv run --with tiktoken python benchmarks/train.py --text /tmp/shakespeare.txt --mode persistent --steps 200 --output /tmp/cuda-training.json
+uv run --with tiktoken python benchmarks/train.py --batch 4 --sequence 64 --text /tmp/shakespeare.txt --mode pytorch --steps 200 --output /tmp/pytorch-training.json
+uv run --with tiktoken python benchmarks/train.py --batch 4 --sequence 64 --text /tmp/shakespeare.txt --mode persistent --steps 200 --output /tmp/cuda-training.json
 ```
 
 ## Methodology
@@ -59,8 +59,8 @@ eps=1e-8, weight decay=0.01. Both sides receive the same initialization, inputs
 and explicit targets. Random initialization avoids a network dependency.
 
 ```sh
-python benchmarks/compare.py --steps 5 --iterations 50 --output benchmarks/rtx3080.json
-python benchmarks/compare.py --standalone
+python benchmarks/compare.py --batch 4 --sequence 64 --steps 5 --iterations 50 --output benchmarks/rtx3080.json
+python benchmarks/compare.py --batch 4 --sequence 64 --standalone
 python benchmarks/gemm.py
 python benchmarks/check_runtime.py
 ```

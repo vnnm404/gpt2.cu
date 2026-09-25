@@ -1,5 +1,10 @@
 # gpt2.cu: persistent GPT-2 training
 
+This is the **H100 training-throughput branch**. Benchmarks default to batch 32
+and sequence 128, with larger batches as the optimization target. See the
+[H100 workload plan](benchmarks/H100.md). H100 GPU validation is pending; the
+measurements below are historical RTX 3080 results.
+
 GPT-2 forward, mean cross-entropy loss, backward, and AdamW execute in one
 persistent CUDA kernel. Parameters, activations, gradients, and optimizer state
 use **FP32**. GEMMs use ordinary SIMT FP32 arithmetic, not TF32 or mixed precision.

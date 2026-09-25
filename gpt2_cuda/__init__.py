@@ -31,7 +31,9 @@ class Backend:
         build = ROOT / "build"
         build.mkdir(exist_ok=True)
         self.gemm = "cutlass_simt_fp32"
-        library = build / "libgpt2_executor.so"
+        major, minor = torch.cuda.get_device_capability()
+        architecture = f"sm_{major}{minor}"
+        library = build / f"libgpt2_executor_{architecture}.so"
         dependency = build / "cutlass"
         revision = "f7b19de32c5d1f3cedfc735c2849f12b537522ee"
         if not dependency.exists():
@@ -43,7 +45,7 @@ class Backend:
         extra = ["--expt-relaxed-constexpr", "-I", str(dependency / "include")]
         sources = [ROOT / "src/executor.cu", *ROOT.glob("include/gpt2/kernels/*.cuh"), ROOT / "include/gpt2/executor.h"]
         if not library.exists() or any(p.stat().st_mtime > library.stat().st_mtime for p in sources):
-            subprocess.run(["nvcc", "-std=c++17", "-O3", "-lineinfo", "-arch=sm_86",
+            subprocess.run(["nvcc", "-std=c++17", "-O3", "-lineinfo", f"-arch={architecture}",
                             "--shared", "-Xcompiler=-fPIC", "-I", str(ROOT / "include"),
                             str(sources[0]), "-o", str(library),
                             *extra], check=True)
