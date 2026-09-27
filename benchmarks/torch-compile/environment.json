@@ -1,0 +1,22 @@
+{
+  "gpu": "NVIDIA GeForce RTX 3080",
+  "sm_count": 68,
+  "memory_bytes": 10363666432,
+  "torch": "2.5.1+cu124",
+  "cuda": "12.4",
+  "python": "3.11.10",
+  "nvidia_smi": "570.211.01, 250.00 W",
+  "compiler_cache": "Separate initially absent TORCHINDUCTOR_CACHE_DIR per mode and shape",
+  "inductor_compile_threads": 2,
+  "branch": "rtx3080-tile-pipeline",
+  "core_commit": "766d3d9",
+  "benchmark": "compare.py with compile-mode and alternating timing rounds",
+  "instance": 52982738,
+  "destroyed_confirmed": true,
+  "destruction_checked_utc": "2026-09-27T16:03:09.599544+00:00",
+  "rental_elapsed_hours_upper_estimate": 0.2041190180513594,
+  "listed_usd_per_hour_including_disk": 0.13622222222222227,
+  "estimated_rental_usd": 0.02780554623677408,
+  "cost_note": "Elapsed-time estimate at listed rate, not an invoice; excludes transfer charges.",
+  "benchmark_sha256": "dd403adcde2bbffee5a0505853f75299ce59d0e0f0955a1ae1ebcb602eb0ea75"
+}

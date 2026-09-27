@@ -3,6 +3,8 @@ import argparse
 import json
 import os
 import hashlib
+import statistics
+import time
 from pathlib import Path
 
 import torch
@@ -30,13 +32,18 @@ def main():
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--standalone", action="store_true")
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--compile-mode", choices=("default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"),
+                        help="Compile the reference forward/backward with Inductor; retain fused AdamW")
+    parser.add_argument("--repeats", type=int, default=3,
+                        help="Alternate timing order across independent measurement rounds")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    if args.batch < 1 or not 1 <= args.sequence <= 256 or args.steps < 1 or args.iterations < 1:
-        parser.error("positive batch/steps/iterations and sequence in [1, 256] required")
+    if args.batch < 1 or not 1 <= args.sequence <= 256 or min(args.steps, args.iterations, args.repeats) < 1:
+        parser.error("positive batch/steps/iterations/repeats and sequence in [1, 256] required")
     torch.set_num_threads(1)
     torch.manual_seed(123)
     torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
     model = GPT(GPTConfig(n_layer=args.layers)).cuda()
     tokens = torch.randint(50257, (args.batch, args.sequence), device="cuda", dtype=torch.int32)
     targets = torch.randint(50257, (args.batch, args.sequence), device="cuda", dtype=torch.int32)
@@ -47,10 +54,19 @@ def main():
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0.01,
                            betas=(0.9, 0.999), eps=1e-8, fused=True)
     x, y = tokens.long(), targets.long()
+    # Keep the original module for parameter/gradient validation. Compilation
+    # includes AOTAutograd backward; the identical fused optimizer stays eager.
+    setup_start = time.perf_counter()
+    reference_model = (torch.compile(model, backend="inductor", mode=args.compile_mode,
+                                     fullgraph=True, dynamic=False)
+                       if args.compile_mode else model)
+    compile_wrapper_seconds = time.perf_counter() - setup_start
 
     def reference_step():
         opt.zero_grad(set_to_none=True)
-        logits, loss = model(x, y)
+        if args.compile_mode:
+            torch.compiler.cudagraph_mark_step_begin()
+        logits, loss = reference_model(x, y)
         loss.backward()
         opt.step()
         return logits, loss
@@ -60,7 +76,12 @@ def main():
 
     checks = []
     for i in range(args.steps):
+        torch.cuda.synchronize()
+        reference_start = time.perf_counter()
         logits, loss = reference_step()
+        torch.cuda.synchronize()
+        if i == 0:
+            first_reference_step_seconds = time.perf_counter() - reference_start
         cuda_step()
         torch.cuda.synchronize()
         torch.testing.assert_close(program.mean_loss, loss, atol=2e-5, rtol=2e-5)
@@ -81,6 +102,8 @@ def main():
                  "worst_gradient_relative_rms": worst_grad}
         checks.append(check)
         print(json.dumps(check), flush=True)
+        # Release graph-managed outputs before marking the next training step.
+        del logits, loss
 
     if args.profile:
         timings = []
@@ -99,14 +122,26 @@ def main():
               "tf32": False, "dtype": "float32", "layers": args.layers,
               "cuda_gemm": backend.gemm, "grouped": os.getenv("GROUP", "1") != "0",
               "operations": len(program.ops), "stages": program.stages,
-              "batch": args.batch, "sequence": args.sequence, "optimizer": "AdamW fused reference", "pytorch_execution": "eager",
+              "batch": args.batch, "sequence": args.sequence, "optimizer": "AdamW fused reference",
+              "pytorch_execution": "torch.compile" if args.compile_mode else "eager",
+              "compile_mode": args.compile_mode, "compile_backend": "inductor" if args.compile_mode else None,
+              "compile_fullgraph": bool(args.compile_mode), "optimizer_compiled": False,
+              "compile_wrapper_seconds": compile_wrapper_seconds,
+              "first_reference_step_seconds": first_reference_step_seconds,
               "resident_worker_capacity": backend.capacity, "workers": args.workers or backend.workers,
               "mode": "standalone" if args.standalone else "persistent", "checks": checks,
               "tile_engine": os.getenv("TILE_ENGINE", "ready"), "page_rows": sorted(set(program.page_rows)),
               "page_engine": os.getenv("PAGE_ENGINE", "warps"),
               "tile_regions": len(program.tile_graphs), "page_pipelines": program.page_pipelines}
-    result["pytorch"] = measure(reference_step, iterations=args.iterations)
-    result["cuda"] = measure(cuda_step, iterations=args.iterations)
+    rounds = {"pytorch": [], "cuda": []}
+    for repeat in range(args.repeats):
+        order = (("pytorch", reference_step), ("cuda", cuda_step))
+        for name, step in order[::1 if repeat % 2 == 0 else -1]:
+            rounds[name].append(measure(step, iterations=args.iterations))
+    for name, measurements in rounds.items():
+        result[name] = {key: statistics.median(m[key] for m in measurements)
+                        for key in ("gpu_median_ms", "wall_median_ms", "gpu_min_ms")}
+        result[name].update(iterations=args.iterations, repeats=args.repeats, measurements=measurements)
     result["speedup"] = result["pytorch"]["gpu_median_ms"] / result["cuda"]["gpu_median_ms"]
     print(json.dumps(result, indent=2), flush=True)
     if args.output:

@@ -1,0 +1,146 @@
+/root/gpt2.cu/scripts/llm.py:17: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+  from torch.distributed.optim import ZeroRedundancyOptimizer
+GPU=NVIDIA GeForce RTX 3080 resident worker capacity=136
+482 operations in 225 stages; 124475904 parameter slots
+/opt/conda/lib/python3.11/site-packages/torch/_inductor/compile_fx.py:167: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+{"step": 1, "loss": 10.98294448852539, "cuda_loss": 10.982942581176758, "worst_gradient_relative_rms": [1.7160143670480466e-06, "transformer.h.3.ln_2.weight"]}
+{"step": 2, "loss": 9.52655029296875, "cuda_loss": 9.52655029296875, "worst_gradient_relative_rms": [1.6491298083565198e-05, "transformer.h.7.attn.c_attn.weight"]}
+{"step": 3, "loss": 8.431350708007812, "cuda_loss": 8.431343078613281, "worst_gradient_relative_rms": [2.4628108803881332e-05, "transformer.h.7.ln_2.weight"]}
+{"step": 4, "loss": 8.022302627563477, "cuda_loss": 8.022303581237793, "worst_gradient_relative_rms": [2.677636621228885e-05, "transformer.h.3.ln_1.weight"]}
+{"step": 5, "loss": 6.639626502990723, "cuda_loss": 6.639619827270508, "worst_gradient_relative_rms": [2.7482927180244587e-05, "transformer.h.7.attn.c_attn.weight"]}
+{
+  "source_sha256": "ffa9c785413e720d4caa0a3768c8a2d7d78a3d7b7168119faf71319de0708f31",
+  "gpu": "NVIDIA GeForce RTX 3080",
+  "torch": "2.5.1+cu124",
+  "cuda_version": "12.4",
+  "tf32": false,
+  "dtype": "float32",
+  "layers": 12,
+  "cuda_gemm": "cutlass_simt_fp32",
+  "grouped": true,
+  "operations": 482,
+  "stages": 225,
+  "batch": 4,
+  "sequence": 64,
+  "optimizer": "AdamW fused reference",
+  "pytorch_execution": "torch.compile",
+  "compile_mode": "reduce-overhead",
+  "compile_backend": "inductor",
+  "compile_fullgraph": true,
+  "optimizer_compiled": false,
+  "compile_wrapper_seconds": 0.0023182928562164307,
+  "first_reference_step_seconds": 21.10514357406646,
+  "resident_worker_capacity": 136,
+  "workers": 136,
+  "mode": "persistent",
+  "checks": [
+    {
+      "step": 1,
+      "loss": 10.98294448852539,
+      "cuda_loss": 10.982942581176758,
+      "worst_gradient_relative_rms": [
+        1.7160143670480466e-06,
+        "transformer.h.3.ln_2.weight"
+      ]
+    },
+    {
+      "step": 2,
+      "loss": 9.52655029296875,
+      "cuda_loss": 9.52655029296875,
+      "worst_gradient_relative_rms": [
+        1.6491298083565198e-05,
+        "transformer.h.7.attn.c_attn.weight"
+      ]
+    },
+    {
+      "step": 3,
+      "loss": 8.431350708007812,
+      "cuda_loss": 8.431343078613281,
+      "worst_gradient_relative_rms": [
+        2.4628108803881332e-05,
+        "transformer.h.7.ln_2.weight"
+      ]
+    },
+    {
+      "step": 4,
+      "loss": 8.022302627563477,
+      "cuda_loss": 8.022303581237793,
+      "worst_gradient_relative_rms": [
+        2.677636621228885e-05,
+        "transformer.h.3.ln_1.weight"
+      ]
+    },
+    {
+      "step": 5,
+      "loss": 6.639626502990723,
+      "cuda_loss": 6.639619827270508,
+      "worst_gradient_relative_rms": [
+        2.7482927180244587e-05,
+        "transformer.h.7.attn.c_attn.weight"
+      ]
+    }
+  ],
+  "tile_engine": "ready",
+  "page_rows": [
+    2
+  ],
+  "page_engine": "warps",
+  "tile_regions": 24,
+  "page_pipelines": 24,
+  "pytorch": {
+    "gpu_median_ms": 31.10758399963379,
+    "wall_median_ms": 31.122395070269704,
+    "gpu_min_ms": 30.282751083374023,
+    "iterations": 50,
+    "repeats": 3,
+    "measurements": [
+      {
+        "gpu_median_ms": 30.990848541259766,
+        "wall_median_ms": 31.00617998279631,
+        "gpu_min_ms": 30.16499137878418,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 31.10758399963379,
+        "wall_median_ms": 31.122395070269704,
+        "gpu_min_ms": 30.298112869262695,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 31.16697597503662,
+        "wall_median_ms": 31.18146490305662,
+        "gpu_min_ms": 30.282751083374023,
+        "iterations": 50
+      }
+    ]
+  },
+  "cuda": {
+    "gpu_median_ms": 27.75500774383545,
+    "wall_median_ms": 27.77007652912289,
+    "gpu_min_ms": 27.435007095336914,
+    "iterations": 50,
+    "repeats": 3,
+    "measurements": [
+      {
+        "gpu_median_ms": 27.75500774383545,
+        "wall_median_ms": 27.77007652912289,
+        "gpu_min_ms": 27.442176818847656,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 27.74783992767334,
+        "wall_median_ms": 27.76045200880617,
+        "gpu_min_ms": 27.435007095336914,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 27.77340793609619,
+        "wall_median_ms": 27.78566663619131,
+        "gpu_min_ms": 27.390975952148438,
+        "iterations": 50
+      }
+    ]
+  },
+  "speedup": 1.1207917607784839
+}

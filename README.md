@@ -84,8 +84,9 @@ print(training.mean_loss.item())     # synchronize only when reporting
 Shapes and tensor addresses are fixed when the program is constructed. Update
 input buffers in place for subsequent batches. The implemented attention head
 width is 64 and sequence lengths are bounded at 256; performance is tuned and
-reported for GPT-2 124M at batches/sequences 4×64 and 8×128. The results do not establish parity
-with `torch.compile`, CUDA Graphs, mixed-precision training, or other GPUs/shapes.
+reported for GPT-2 124M at batches/sequences 4×64 and 8×128. The [torch.compile comparison](benchmarks/COMPILE.md) measures Inductor default
+and reduce-overhead modes at these shapes. Results do not establish parity with
+mixed-precision training or other GPUs/shapes.
 
 The superseded executor, binary-format drivers, and timer tools have been
 removed. Their historical versions remain in Git at `b6300cb`. Current validation

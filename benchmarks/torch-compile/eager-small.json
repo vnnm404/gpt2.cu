@@ -1,0 +1,135 @@
+{
+  "source_sha256": "ffa9c785413e720d4caa0a3768c8a2d7d78a3d7b7168119faf71319de0708f31",
+  "gpu": "NVIDIA GeForce RTX 3080",
+  "torch": "2.5.1+cu124",
+  "cuda_version": "12.4",
+  "tf32": false,
+  "dtype": "float32",
+  "layers": 12,
+  "cuda_gemm": "cutlass_simt_fp32",
+  "grouped": true,
+  "operations": 482,
+  "stages": 225,
+  "batch": 4,
+  "sequence": 64,
+  "optimizer": "AdamW fused reference",
+  "pytorch_execution": "eager",
+  "compile_mode": null,
+  "compile_backend": null,
+  "compile_fullgraph": false,
+  "optimizer_compiled": false,
+  "compile_wrapper_seconds": 1.0600779205560684e-06,
+  "first_reference_step_seconds": 0.2394077170174569,
+  "resident_worker_capacity": 136,
+  "workers": 136,
+  "mode": "persistent",
+  "checks": [
+    {
+      "step": 1,
+      "loss": 10.98294448852539,
+      "cuda_loss": 10.982942581176758,
+      "worst_gradient_relative_rms": [
+        1.7195383179569035e-06,
+        "transformer.h.3.ln_2.weight"
+      ]
+    },
+    {
+      "step": 2,
+      "loss": 9.52655029296875,
+      "cuda_loss": 9.526552200317383,
+      "worst_gradient_relative_rms": [
+        2.1388263121480122e-05,
+        "transformer.h.1.mlp.c_fc.weight"
+      ]
+    },
+    {
+      "step": 3,
+      "loss": 8.431352615356445,
+      "cuda_loss": 8.431343078613281,
+      "worst_gradient_relative_rms": [
+        2.8953811124665663e-05,
+        "transformer.h.7.mlp.c_fc.weight"
+      ]
+    },
+    {
+      "step": 4,
+      "loss": 8.02230453491211,
+      "cuda_loss": 8.022303581237793,
+      "worst_gradient_relative_rms": [
+        3.3185478969244286e-05,
+        "transformer.h.2.ln_2.weight"
+      ]
+    },
+    {
+      "step": 5,
+      "loss": 6.6396307945251465,
+      "cuda_loss": 6.639619827270508,
+      "worst_gradient_relative_rms": [
+        3.8166141166584566e-05,
+        "transformer.h.7.attn.c_attn.bias"
+      ]
+    }
+  ],
+  "tile_engine": "ready",
+  "page_rows": [
+    2
+  ],
+  "page_engine": "warps",
+  "tile_regions": 24,
+  "page_pipelines": 24,
+  "pytorch": {
+    "gpu_median_ms": 38.46246337890625,
+    "wall_median_ms": 38.47673500422388,
+    "gpu_min_ms": 33.91795349121094,
+    "iterations": 50,
+    "repeats": 3,
+    "measurements": [
+      {
+        "gpu_median_ms": 38.06819152832031,
+        "wall_median_ms": 38.08305261190981,
+        "gpu_min_ms": 33.82886505126953,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 38.46246337890625,
+        "wall_median_ms": 38.47673500422388,
+        "gpu_min_ms": 33.91795349121094,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 38.49523162841797,
+        "wall_median_ms": 38.51008554920554,
+        "gpu_min_ms": 34.35724639892578,
+        "iterations": 50
+      }
+    ]
+  },
+  "cuda": {
+    "gpu_median_ms": 27.942399978637695,
+    "wall_median_ms": 27.955657918937504,
+    "gpu_min_ms": 27.53740882873535,
+    "iterations": 50,
+    "repeats": 3,
+    "measurements": [
+      {
+        "gpu_median_ms": 27.83232021331787,
+        "wall_median_ms": 27.849397039972246,
+        "gpu_min_ms": 27.445247650146484,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 27.942399978637695,
+        "wall_median_ms": 27.955657918937504,
+        "gpu_min_ms": 27.53740882873535,
+        "iterations": 50
+      },
+      {
+        "gpu_median_ms": 27.945472717285156,
+        "wall_median_ms": 27.961193001829088,
+        "gpu_min_ms": 27.616256713867188,
+        "iterations": 50
+      }
+    ]
+  },
+  "speedup": 1.376491046163224
+}
