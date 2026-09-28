@@ -41,29 +41,4 @@ struct DeviceAtomic {
     }
 };
 
-// Ampere shared-memory barriers provide page ownership independently of the
-// CTA-wide barrier. Parity is safe because each page has one producer/consumer
-// and cannot advance again until the consumer explicitly releases it.
-struct PageBarrier {
-    unsigned address;
-    __device__ __forceinline__ explicit PageBarrier(unsigned long long &value)
-        : address(static_cast<unsigned>(__cvta_generic_to_shared(&value))) {}
-    __device__ __forceinline__ void init() const {
-        asm volatile("mbarrier.init.shared.b64 [%0], 1;" :: "r"(address) : "memory");
-    }
-    __device__ __forceinline__ void arrive() const {
-        asm volatile("mbarrier.arrive.shared.b64 _, [%0];" :: "r"(address) : "memory");
-    }
-    __device__ __forceinline__ void wait(int phase) const {
-        int done;
-        do {
-            asm volatile("{ .reg .pred done; mbarrier.test_wait.parity.shared.b64 done, [%1], %2; "
-                         "selp.u32 %0, 1, 0, done; }" : "=r"(done) : "r"(address), "r"(phase & 1) : "memory");
-            if (!done) __nanosleep(32);
-        } while (!done);
-    }
-    __device__ __forceinline__ void invalidate() const {
-        asm volatile("mbarrier.inval.shared.b64 [%0];" :: "r"(address) : "memory");
-    }
-};
 } // namespace gpt2

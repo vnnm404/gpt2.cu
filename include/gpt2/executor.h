@@ -13,6 +13,7 @@ enum class Code : int { gemm, add, gelu, gelu_backward, norm, norm_backward,
 // tile_graph is an internal cooperative instruction: p[0..7] hold operations,
 // tasks, edges, ready queue, dependency counters, queue control, roots, trace.
 // page_norm uses two CTA-local pages; flags is rows/task and k selects warp roles.
+// GEMM and attention operations use p[7] for host-prepared iterator parameters.
 struct Operation {
     Code code;
     int tiles, m, n, k, flags, group;
@@ -23,10 +24,12 @@ static_assert(sizeof(Operation) == 112);
 } // namespace gpt2
 
 extern "C" {
+int gpt2_threads();
 int gpt2_gemm_tile_m();
 int gpt2_gemm_tile_n();
 int gpt2_occupancy(int *workers);
 int gpt2_gemm_parameters(const gpt2::Operation *op, void *host_buffer);
+int gpt2_attention_parameters(const gpt2::Operation *op, void *host_buffer);
 int gpt2_operation(const gpt2::Operation *host_op, cudaStream_t stream);
 int gpt2_launch(const gpt2::Operation *device_ops, int count, int workers, cudaStream_t stream);
 }

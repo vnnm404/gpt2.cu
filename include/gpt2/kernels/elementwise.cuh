@@ -124,13 +124,13 @@ __device__ __forceinline__ void norm_backward(const Operation &o, int row, float
     }
 }
 
-// Eight warps cooperate on each 32-column stripe. Parallelizing rows keeps
+// Worker warps cooperate on each 32-column stripe. Parallelizing rows keeps
 // narrow bias/LayerNorm reductions from running on only three SMs.
 __device__ __forceinline__ void sum_rows(const Operation &o, int tile, float *s) {
     int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
     int c = tile * 32 + lane;
     float a = 0, b = 0;
-    if (c < o.n) for (int r = warp; r < o.m; r += 8) {
+    if (c < o.n) for (int r = warp; r < o.m; r += threads / 32) {
         float g = o.p[0][r * o.n + c];
         a += g;
         if (o.code == Code::norm_parameters)
@@ -142,7 +142,7 @@ __device__ __forceinline__ void sum_rows(const Operation &o, int tile, float *s)
     if (warp == 0 && c < o.n) {
         a = b = 0;
         #pragma unroll
-        for (int w = 0; w < 8; ++w) {
+        for (int w = 0; w < threads / 32; ++w) {
             a += s[w * 32 + lane];
             b += s[threads + w * 32 + lane];
         }

@@ -5,6 +5,7 @@ import os
 import hashlib
 import statistics
 import time
+import math
 from pathlib import Path
 
 import torch
@@ -16,10 +17,31 @@ from reference import GPT, GPTConfig, measure
 
 
 def error(actual, expected):
-    d = (actual - expected).float()
-    return {"max_abs": d.abs().max().item(),
-            "relative_rms": (d.square().mean().sqrt() /
-                             expected.float().square().mean().sqrt().clamp_min(1e-12)).item()}
+    squared_error, squared_reference, maximum = 0., 0., 0.
+    for a, b in chunks(actual, expected):
+        d = (a - b).float()
+        squared_error += d.square().sum(dtype=torch.float64).item()
+        squared_reference += b.float().square().sum(dtype=torch.float64).item()
+        maximum = max(maximum, d.abs().max().item())
+    return {"max_abs": maximum,
+            "relative_rms": math.sqrt(squared_error / actual.numel()) /
+                            max(math.sqrt(squared_reference / actual.numel()), 1e-12)}
+
+
+def chunks(actual, expected):
+    """Bound validation scratch memory without copying noncontiguous logits."""
+    assert actual.shape == expected.shape
+    if actual.ndim == 0:
+        yield actual, expected
+        return
+    rows = max(1, (1 << 20) // math.prod(actual.shape[1:]))
+    for begin in range(0, actual.shape[0], rows):
+        yield actual[begin:begin + rows], expected[begin:begin + rows]
+
+
+def assert_close(actual, expected, **kwargs):
+    for a, b in chunks(actual, expected):
+        torch.testing.assert_close(a, b, **kwargs)
 
 
 def main():
@@ -85,7 +107,7 @@ def main():
         cuda_step()
         torch.cuda.synchronize()
         torch.testing.assert_close(program.mean_loss, loss, atol=2e-5, rtol=2e-5)
-        torch.testing.assert_close(program.logits, logits.view_as(program.logits), atol=3e-4, rtol=3e-4)
+        assert_close(program.logits, logits.view_as(program.logits), atol=3e-4, rtol=3e-4)
         worst_grad = (0, "")
         for name, p in model.named_parameters():
             grad_error = error(program.weight_grads[name], p.grad)
@@ -94,9 +116,9 @@ def main():
                 worst_grad = (grad_error["relative_rms"], name)
             # Tiny LayerNorm bias gradients can have a large relative error at
             # values close to zero; an absolute check covers that regime.
-            torch.testing.assert_close(program.weight_grads[name], p.grad, atol=3e-5, rtol=3e-3,
+            assert_close(program.weight_grads[name], p.grad, atol=3e-5, rtol=3e-3,
                                        msg=lambda msg: name + " gradient: " + msg)
-            torch.testing.assert_close(program.weights[name], p.detach(), atol=1e-4, rtol=3e-4,
+            assert_close(program.weights[name], p.detach(), atol=1e-4, rtol=3e-4,
                                        msg=lambda msg: name + " parameter: " + msg)
         check = {"step": i + 1, "loss": loss.item(), "cuda_loss": program.mean_loss.item(),
                  "worst_gradient_relative_rms": worst_grad}
@@ -129,6 +151,7 @@ def main():
               "compile_wrapper_seconds": compile_wrapper_seconds,
               "first_reference_step_seconds": first_reference_step_seconds,
               "resident_worker_capacity": backend.capacity, "workers": args.workers or backend.workers,
+              "threads_per_worker": backend.threads,
               "mode": "standalone" if args.standalone else "persistent", "checks": checks,
               "tile_engine": os.getenv("TILE_ENGINE", "ready"), "page_rows": sorted(set(program.page_rows)),
               "page_engine": os.getenv("PAGE_ENGINE", "warps"),

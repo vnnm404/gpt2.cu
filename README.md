@@ -4,15 +4,13 @@ GPT-2 forward, mean cross-entropy loss, backward, and AdamW execute in one
 persistent CUDA kernel. Parameters, activations, gradients, and optimizer state
 use **FP32**. GEMMs use ordinary SIMT FP32 arithmetic, not TF32 or mixed precision.
 
-This branch experiments with **fine-grained RTX 3080 scheduling**. MLP forward
-and backward instructions use tile dependencies, and residual addition plus
-normalization use reusable shared-memory pages with asynchronous input loading.
-See [the scheduling study, measurements, and limits](benchmarks/TILE_SCHEDULING.md).
-Fine-grained execution is demonstrated; it should not be assumed faster for every
-shape. The original grouped scheduler remains available for direct comparison.
+This branch targets **high-batch RTX 3080 training** with 128-thread workers,
+vectorized GEMM input loads, tiled attention, and fine-grained MLP scheduling.
+[High-batch results and reproduction](benchmarks/HIGH_BATCH.md) compare complete
+training steps and a text-training run against `torch.compile`.
 
-The [earlier RTX 3080 benchmarks](benchmarks/README.md) describe commit `d1611e6`
-and are historical measurements, not measurements of this branch.
+The [original tile-scheduling study](benchmarks/TILE_SCHEDULING.md) and
+[earlier compile comparison](benchmarks/COMPILE.md) record historical versions.
 
 ## Run
 
@@ -20,7 +18,7 @@ On an NVIDIA CUDA development host:
 
 ```sh
 uv sync
-uv run python benchmarks/compare.py --steps 5 --iterations 50
+uv run python benchmarks/compare.py --batch 8 --sequence 128 --compile-mode default --steps 5 --iterations 50
 ```
 
 The first run downloads pinned CUTLASS 3.5.1 headers and compiles the shared
@@ -38,15 +36,18 @@ operation benchmarks, and synchronization validation.
 - `include/gpt2/executor.h`: operation descriptors and host API.
 - `include/gpt2/kernels/gemm.cuh`: inlined CUTLASS SIMT threadblock GEMMs with
   double buffering, reduction partitioning, and an L2-oriented tile order.
+- `include/gpt2/kernels/vector_gemm.cuh`: vector global loads and shared-memory
+  transpose stores; odd or unaligned inputs retain the scalar GEMM path.
 - `gpt2_cuda/schedule.py`: rectangular tile dependencies, shared prerequisite
   counters, and GPU task metadata for explicitly marked MLP regions.
 - `include/gpt2/kernels/tile_schedule.cuh`: ready-task and static topological
   scheduling, with device-scoped acquire/release publication.
 - `include/gpt2/kernels/page_pipeline.cuh`: two-page residual/normalization
-  pipeline using loader/compute warp groups and Ampere barriers.
-- `include/gpt2/kernels/sync.cuh`: scoped atomic and page-barrier primitives.
-- `include/gpt2/kernels/attention.cuh`: causal attention and backward kernels;
-  key/value gradients are gathered without float atomics.
+  pipeline using loader/compute warp groups and named ownership barriers.
+- `include/gpt2/kernels/sync.cuh`: device-scoped atomic primitives.
+- `include/gpt2/kernels/attention.cuh`: tiled score/softmax/value and backward
+  products. Each CTA consumes its own query rows; key/value gradients wait for
+  the completed score-gradient stage. No float atomics are used for attention.
 - `include/gpt2/kernels/elementwise.cuh`: normalization, embeddings, residuals,
   GELU, stable cross-entropy, gradient reductions, and AdamW.
 - `benchmarks/`: PyTorch comparisons, operation timings, and correctness checks.
@@ -84,7 +85,8 @@ print(training.mean_loss.item())     # synchronize only when reporting
 Shapes and tensor addresses are fixed when the program is constructed. Update
 input buffers in place for subsequent batches. The implemented attention head
 width is 64 and sequence lengths are bounded at 256; performance is tuned and
-reported for GPT-2 124M at batches/sequences 4×64 and 8×128. The [torch.compile comparison](benchmarks/COMPILE.md) measures Inductor default
+reported for GPT-2 124M at batches/sequences 8×128 and 16×128 on a 12 GB RTX 3080.
+The [high-batch comparison](benchmarks/HIGH_BATCH.md) measures Inductor default
 and reduce-overhead modes at these shapes. Results do not establish parity with
 mixed-precision training or other GPUs/shapes.
 

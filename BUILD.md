@@ -57,4 +57,23 @@ python benchmarks/plot_tile_schedule.py  # optional matplotlib dependency
 `TILE_ENGINE=static` selects topological worker streams; the default ready queue
 assigns only runnable tasks. `PAGE_ENGINE=collective` selects the all-thread
 async-copy implementation; the default uses loader/compute warp groups and
-Ampere page barriers. These are separate ablations, not different precision modes.
+named page-ownership barriers. These are separate ablations, not different precision modes.
+
+## High-batch validation
+
+The current worker uses 128 threads. Attention and page-group barriers derive
+their participating thread counts from that configuration; the cooperative grid
+still comes from the compiled kernel's measured occupancy.
+
+```sh
+python benchmarks/check_gemm.py
+python benchmarks/check_runtime.py
+python benchmarks/check_tile_schedule.py
+python benchmarks/compare.py --batch 8 --sequence 128 --compile-mode default --steps 5 --iterations 50
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python benchmarks/compare.py --batch 16 --sequence 128 --compile-mode reduce-overhead --steps 5 --iterations 50
+```
+
+Batch 16 comparisons were measured on a 12 GB 3080. Validation processes tensors
+in bounded chunks, preserving tolerances without allocating full-logit comparison
+temporaries. See [HIGH_BATCH.md](benchmarks/HIGH_BATCH.md) for the training commands
+and sanitizer coverage.

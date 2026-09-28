@@ -1,3 +1,5 @@
+Current high-batch results: [HIGH_BATCH.md](HIGH_BATCH.md).
+
 For the newer matched eager/`torch.compile` comparison, see [COMPILE.md](COMPILE.md).
 
 The current branch's fine-grained scheduling study is in [TILE_SCHEDULING.md](TILE_SCHEDULING.md).

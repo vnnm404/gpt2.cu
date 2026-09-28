@@ -1,0 +1,2 @@
+name, memory.total [MiB], power.limit [W], driver_version
+NVIDIA GeForce RTX 3080, 12288 MiB, 280.00 W, 580.126.09

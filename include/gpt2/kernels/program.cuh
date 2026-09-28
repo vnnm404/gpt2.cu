@@ -3,7 +3,7 @@
 #include "gpt2/executor.h"
 
 namespace gpt2 {
-constexpr int threads = 256;
+constexpr int threads = 128;
 constexpr int tile_m = 64;
 constexpr int tile_n = 128;
 constexpr int shared_bytes = 32 * 1024;
@@ -22,7 +22,7 @@ __device__ __forceinline__ float reduce(float x, float *s) {
     x = Max ? warp_max(x) : warp_sum(x);
     if ((t & 31) == 0) s[t >> 5] = x;
     __syncthreads();
-    x = t < 8 ? s[t] : (Max ? -INFINITY : 0.f);
+    x = t < threads / 32 ? s[t] : (Max ? -INFINITY : 0.f);
     x = Max ? warp_max(x) : warp_sum(x);
     if (t == 0) s[8] = x;
     __syncthreads();

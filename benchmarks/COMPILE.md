@@ -1,5 +1,7 @@
 # RTX 3080 comparison with torch.compile
 
+Historical report for `0a39b4d`. See [HIGH_BATCH.md](HIGH_BATCH.md) for the current optimized executor.
+
 `compare.py --compile-mode MODE` compiles the reference model's forward with
 Inductor and its backward through AOTAutograd. `fullgraph=True` rejects forward
 graph breaks, and shapes are static. The same fused AdamW optimizer remains

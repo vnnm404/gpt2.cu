@@ -22,18 +22,18 @@ __device__ __forceinline__ void execute(const Operation &o, int tile, float *s) 
         case Code::norm_parameters: case Code::sum_rows: sum_rows(o, tile, s); break;
         case Code::attention: attention(o, tile, s); break;
         case Code::attention_backward: attention_backward(o, tile, s); break;
-        case Code::attention_kv_backward: attention_kv_backward(o, tile); break;
+        case Code::attention_kv_backward: attention_kv_backward(o, tile, s); break;
         case Code::cross_entropy: cross_entropy(o, tile, s); break;
         default: elementwise(o, tile); break;
     }
 }
 
-__global__ __launch_bounds__(256, 2) void standalone(Operation op) {
+__global__ __launch_bounds__(threads, 3) void standalone(Operation op) {
     extern __shared__ float scratch[];
     execute(op, blockIdx.x, scratch);
 }
 
-__global__ __launch_bounds__(256, 2) void persistent(const Operation *ops, int count) {
+__global__ __launch_bounds__(threads, 3) void persistent(const Operation *ops, int count) {
     extern __shared__ float scratch[];
     auto grid = cooperative_groups::this_grid();
     for (int i = 0; i < count;) {
@@ -61,6 +61,8 @@ __global__ __launch_bounds__(256, 2) void persistent(const Operation *ops, int c
     }
 }
 } // namespace gpt2
+
+extern "C" int gpt2_threads() { return gpt2::threads; }
 
 extern "C" int gpt2_gemm_tile_n() { return gpt2::tile_n; }
 
@@ -108,4 +110,8 @@ extern "C" int gpt2_gemm_parameters(const gpt2::Operation *op, void *buffer) {
         case 2: return gpt2::gemm_parameters<false, true>(*op, buffer);
         default: return gpt2::gemm_parameters<true, true>(*op, buffer);
     }
+}
+
+extern "C" int gpt2_attention_parameters(const gpt2::Operation *op, void *buffer) {
+    return gpt2::attention_parameters(*op, buffer);
 }

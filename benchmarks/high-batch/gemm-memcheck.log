@@ -1,0 +1,18 @@
+========= COMPUTE-SANITIZER
+GEMM checks passed: 132x260x100, transpose=(False, False), offset=0
+GEMM checks passed: 132x260x100, transpose=(False, True), offset=0
+GEMM checks passed: 132x260x100, transpose=(True, False), offset=0
+GEMM checks passed: 132x260x100, transpose=(True, True), offset=0
+GEMM checks passed: 67x71x53, transpose=(False, False), offset=0
+GEMM checks passed: 67x71x53, transpose=(False, True), offset=0
+GEMM checks passed: 67x71x53, transpose=(True, False), offset=0
+GEMM checks passed: 67x71x53, transpose=(True, True), offset=0
+GEMM checks passed: 128x256x96, transpose=(False, False), offset=1
+GEMM checks passed: 128x256x96, transpose=(False, True), offset=1
+GEMM checks passed: 128x256x96, transpose=(True, False), offset=1
+GEMM checks passed: 128x256x96, transpose=(True, True), offset=1
+GEMM checks passed: 8x12x5000, transpose=(False, False), offset=0
+GEMM checks passed: 8x12x5000, transpose=(False, True), offset=0
+GEMM checks passed: 8x12x5000, transpose=(True, False), offset=0
+GEMM checks passed: 8x12x5000, transpose=(True, True), offset=0
+========= ERROR SUMMARY: 0 errors

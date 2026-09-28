@@ -1,0 +1,3 @@
+[ 50%] Building CUDA object CMakeFiles/gpt2_executor.dir/src/executor.cu.o
+[100%] Linking CUDA shared library libgpt2_executor.so
+[100%] Built target gpt2_executor

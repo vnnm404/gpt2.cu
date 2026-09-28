@@ -48,12 +48,14 @@ class Backend:
                             str(sources[0]), "-o", str(library),
                             *extra], check=True)
         self.lib = ct.CDLL(str(library))
+        self.threads = self.lib.gpt2_threads()
         self.tile_m = self.lib.gpt2_gemm_tile_m()
         self.tile_n = self.lib.gpt2_gemm_tile_n()
         self.lib.gpt2_operation.argtypes = [ct.POINTER(Operation), ct.c_void_p]
         self.lib.gpt2_launch.argtypes = [ct.c_void_p, ct.c_int, ct.c_int, ct.c_void_p]
         self.lib.gpt2_occupancy.argtypes = [ct.POINTER(ct.c_int)]
         self.lib.gpt2_gemm_parameters.argtypes = [ct.POINTER(Operation), ct.c_void_p]
+        self.lib.gpt2_attention_parameters.argtypes = [ct.POINTER(Operation), ct.c_void_p]
         capacity = ct.c_int()
         self.check(self.lib.gpt2_occupancy(ct.byref(capacity)))
         self.capacity = capacity.value
@@ -122,9 +124,9 @@ class Program:
         m, n = out.shape
         k = a.shape[0] if ta else a.shape[1]
         output_tiles = ((m + self.backend.tile_m - 1) // self.backend.tile_m) * ((n + self.backend.tile_n - 1) // self.backend.tile_n)
-        splits = 16 if k > 4096 else 1
+        splits = 4 if k > 4096 else 1
         if k <= 4096 and k >= 768:
-            while output_tiles * splits < self.backend.capacity and splits < 8:
+            while output_tiles * splits < self.backend.capacity * 0.8 and splits < 8:
                 splits *= 2
         temp = self.empty((splits, m, n)) if splits > 1 else out
         self.emit(Code.GEMM, [a, b, temp, bias if splits == 1 else None], m, n, k,
@@ -137,9 +139,10 @@ class Program:
     def upload(self):
         if not self.ops:
             raise ValueError("Cannot upload an empty program")
-        prepare = self.backend.lib.gpt2_gemm_parameters
         for op in self.ops:
-            if op.code == Code.GEMM:
+            if op.code in (Code.GEMM, Code.ATTENTION, Code.ATTENTION_BACKWARD, Code.ATTENTION_KV_BACKWARD):
+                prepare = (self.backend.lib.gpt2_gemm_parameters if op.code == Code.GEMM
+                           else self.backend.lib.gpt2_attention_parameters)
                 size = prepare(ct.byref(op), None)
                 host = ct.create_string_buffer(size)
                 self.backend.check(prepare(ct.byref(op), host))
@@ -346,7 +349,7 @@ class Training(Program):
         def attention(qkv):
             out = self.empty((B * T, C))
             probs = self.empty((B * T, C // 64, T))
-            tiles = (B * T * (C // 64) + 7) // 8
+            tiles = B * (C // 64) * ((T + backend.tile_m - 1) // backend.tile_m)
             self.emit(Code.ATTENTION, [qkv, out, probs], B * T, C, T, tiles=tiles)
 
             def backward():

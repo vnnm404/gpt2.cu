@@ -18,21 +18,29 @@ def main():
     p.add_argument('--text', type=Path, required=True)
     p.add_argument('--mode', choices=['pytorch', 'persistent'], required=True)
     p.add_argument('--steps', type=int, default=200)
+    p.add_argument('--batch', type=int, default=8)
+    p.add_argument('--sequence', type=int, default=128)
+    p.add_argument('--compile-mode', choices=['default', 'reduce-overhead'])
     p.add_argument('--output', type=Path, required=True)
     args = p.parse_args()
+    if args.batch < 1 or not 1 <= args.sequence <= 256 or args.steps < 1:
+        p.error('positive batch/steps and sequence in [1, 256] required')
+    if args.compile_mode and args.mode != 'pytorch':
+        p.error('compile-mode applies only to the PyTorch reference')
     import tiktoken
     torch.set_num_threads(1)
     torch.manual_seed(123)
     torch.backends.cuda.matmul.allow_tf32 = False
     raw = args.text.read_bytes()
     ids = tiktoken.get_encoding('gpt2').encode(raw.decode('utf-8'))
-    assert len(ids) > 257 and args.steps > 0
+    assert len(ids) > 1
     # Preload the same contiguous next-token batches for both implementations.
     corpus = torch.tensor(ids, dtype=torch.int32, device='cuda')
-    offsets = torch.arange(args.steps * 256 + 1, device='cuda') % len(ids)
+    tokens_per_step = args.batch * args.sequence
+    offsets = torch.arange(args.steps * tokens_per_step + 1, device='cuda') % len(ids)
     stream = corpus[offsets]
-    xs = stream[:-1].view(args.steps, 4, 64).contiguous()
-    ys = stream[1:].view(args.steps, 4, 64).contiguous()
+    xs = stream[:-1].view(args.steps, args.batch, args.sequence).contiguous()
+    ys = stream[1:].view(args.steps, args.batch, args.sequence).contiguous()
     model = GPT(GPTConfig()).cuda()
     initial = {k: v.detach().clone() for k, v in model.state_dict().items()}
     losses = torch.empty(args.steps, device='cuda')
@@ -50,11 +58,15 @@ def main():
         x, y = xs[0].clone(), ys[0].clone()
         opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=.01,
                                betas=(.9, .999), eps=1e-8, fused=True)
+        reference = (torch.compile(model, backend='inductor', mode=args.compile_mode,
+                                   fullgraph=True, dynamic=False) if args.compile_mode else model)
         def step(i):
+            if args.compile_mode:
+                torch.compiler.cudagraph_mark_step_begin()
             x.copy_(xs[i])
             y.copy_(ys[i])
             opt.zero_grad(set_to_none=True)
-            _, loss = model(x, y)
+            _, loss = reference(x, y)
             loss.backward()
             opt.step()
             losses[i].copy_(loss.detach())
@@ -79,15 +91,16 @@ def main():
     root = Path(__file__).resolve().parents[1]
     digest = hashlib.sha256()
     for path in sorted([root / 'src/executor.cu', root / 'include/gpt2/executor.h',
-                        root / 'gpt2_cuda/__init__.py', *root.glob('include/gpt2/kernels/*.cuh')]):
+                        *root.glob('gpt2_cuda/*.py'), *root.glob('include/gpt2/kernels/*.cuh')]):
         digest.update(path.read_bytes())
     result = dict(source_sha256=digest.hexdigest(), tokenizer_version=tiktoken.__version__,
-                  cuda_version=torch.version.cuda, mode=args.mode, steps=args.steps, batch=4, sequence=64,
+                  cuda_version=torch.version.cuda, mode=args.mode, steps=args.steps,
+                  batch=args.batch, sequence=args.sequence, compile_mode=args.compile_mode,
                   gpu=torch.cuda.get_device_name(), torch=torch.__version__,
                   corpus_sha256=hashlib.sha256(raw).hexdigest(), corpus_tokens=len(ids),
                   initialization='random seed 123, GPT-2 124M', dtype='float32', tf32=False,
                   wall_seconds=elapsed, gpu_seconds=start.elapsed_time(end)/1000,
-                  tokens_per_second=args.steps*256/elapsed, losses=losses.tolist(),
+                  tokens_per_second=args.steps*tokens_per_step/elapsed, losses=losses.tolist(),
                   timing='Includes batch copies, forward, backward, AdamW, loss recording; excludes setup and five reset warmup steps')
     args.output.write_text(json.dumps(result, indent=2)+'\n')
     print(json.dumps({k:v for k,v in result.items() if k != 'losses'}, indent=2))

@@ -1,0 +1,25 @@
+{
+  "python": "3.11.10",
+  "torch": "2.5.1+cu124",
+  "cuda": "12.4",
+  "tokenizer": "0.14.0",
+  "gpu": "NVIDIA GeForce RTX 3080",
+  "sm_count": 70,
+  "memory_bytes": 12487098368,
+  "compute_capability": [
+    8,
+    6
+  ],
+  "cutlass_revision": "f7b19de32c5d1f3cedfc735c2849f12b537522ee",
+  "compiler_flags": [
+    "-std=c++17",
+    "-O3",
+    "-lineinfo",
+    "-arch=sm_86",
+    "--shared",
+    "-Xcompiler=-fPIC",
+    "--expt-relaxed-constexpr"
+  ],
+  "sanitizer": "2026.1.1.0",
+  "rental_hourly_usd": 0.14444444444444443
+}

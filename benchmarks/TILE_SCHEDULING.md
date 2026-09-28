@@ -1,5 +1,7 @@
 # Fine-grained scheduling and page pipelines on RTX 3080
 
+Historical report for `7869ede`. See [HIGH_BATCH.md](HIGH_BATCH.md) for the current optimized executor.
+
 ## What this experiment implements
 
 Ampere can execute a tile dependency graph without a grid barrier between its

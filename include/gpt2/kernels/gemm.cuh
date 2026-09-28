@@ -1,6 +1,7 @@
 #pragma once
 #include <cstring>
 #include "program.cuh"
+#include "vector_gemm.cuh"
 #include <cutlass/gemm/kernel/default_gemm.h>
 #include <cutlass/epilogue/thread/linear_combination.h>
 
@@ -23,14 +24,13 @@ using CutlassGemm = typename cutlass::gemm::kernel::DefaultGemm<
     float, typename std::conditional<TB, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor>::type, 1,
     float, cutlass::layout::RowMajor, float,
     cutlass::arch::OpClassSimt, cutlass::arch::Sm80,
-    cutlass::gemm::GemmShape<tile_m, tile_n, 8>, cutlass::gemm::GemmShape<32, 32, 8>,
+    cutlass::gemm::GemmShape<tile_m, tile_n, 8>, cutlass::gemm::GemmShape<64, 32, 8>,
     cutlass::gemm::GemmShape<1, 1, 1>,
     cutlass::epilogue::thread::LinearCombination<float, 1, float, float>,
     WorkerSwizzle, 2, false, cutlass::arch::OpMultiplyAdd>::GemmKernel;
 
-template<bool TA, bool TB>
-__device__ __forceinline__ void gemm(const Operation &o, int task, float *s) {
-    using Kernel = CutlassGemm<TA, TB>;
+template<class Kernel>
+__device__ __forceinline__ void gemm_tile(const Operation &o, int task, float *s) {
     static_assert(Kernel::kThreadCount == threads);
     static_assert(sizeof(typename Kernel::SharedStorage) + 128 <= shared_bytes);
     int nc = (o.n + tile_n - 1) / tile_n, count = ((o.m + tile_m - 1) / tile_m) * nc;
@@ -50,9 +50,8 @@ __device__ __forceinline__ void gemm(const Operation &o, int task, float *s) {
     Kernel{}(params[split], storage);
 }
 
-template<bool TA, bool TB>
-int gemm_parameters(const Operation &o, void *buffer) {
-    using Kernel = CutlassGemm<TA, TB>;
+template<class Kernel, bool TA, bool TB>
+int gemm_parameters_for(const Operation &o, void *buffer) {
     using LayoutA = typename Kernel::Mma::IteratorA::Layout;
     using LayoutB = typename Kernel::Mma::IteratorB::Layout;
     int splits = max(1, o.flags >> 8);
@@ -72,5 +71,18 @@ int gemm_parameters(const Operation &o, void *buffer) {
         std::memcpy(static_cast<char *>(buffer) + split * sizeof(p), &p, sizeof(p));
     }
     return 0;
+}
+template<bool TA, bool TB>
+using VectorGemm = typename VectorGemmConfig<TA, TB, CutlassGemm<TA, TB>, WorkerSwizzle>::Kernel;
+
+template<bool TA, bool TB>
+__device__ __forceinline__ void gemm(const Operation &o, int task, float *s) {
+    if (vector_gemm_eligible(o)) gemm_tile<VectorGemm<TA, TB>>(o, task, s);
+    else gemm_tile<CutlassGemm<TA, TB>>(o, task, s);
+}
+template<bool TA, bool TB>
+int gemm_parameters(const Operation &o, void *buffer) {
+    if (vector_gemm_eligible(o)) return gemm_parameters_for<VectorGemm<TA, TB>, TA, TB>(o, buffer);
+    return gemm_parameters_for<CutlassGemm<TA, TB>, TA, TB>(o, buffer);
 }
 } // namespace gpt2

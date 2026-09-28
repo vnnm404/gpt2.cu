@@ -23,6 +23,7 @@ def compile_region(program, begin, end):
     from . import Code, Operation
     ops = program.ops[begin:end]
     shapes = program.shapes
+    tm, tn = program.backend.tile_m, program.backend.tile_n
     nodes, parents, footprints = [], [], []
     readers, writers = defaultdict(list), defaultdict(list)
     for oi, op in enumerate(ops):
@@ -34,7 +35,7 @@ def compile_region(program, begin, end):
             shape = shapes[dest]
             assert len(shape) == 2
             rows, columns = shape
-            count = ((rows + 63) // 64) * ((columns + 127) // 128)
+            count = ((rows + tm - 1) // tm) * ((columns + tn - 1) // tn)
         elif op.code == Code.SUM_ROWS:
             assert not op.p[1] and not op.p[2]
             count = op.tiles
@@ -43,12 +44,12 @@ def compile_region(program, begin, end):
         for tile in range(count):
             read, write, rect_columns = [], [], 0
             if op.code == Code.GEMM:
-                nr, nc = (op.m + 63) // 64, (op.n + 127) // 128
+                nr, nc = (op.m + tm - 1) // tm, (op.n + tn - 1) // tn
                 split, t = divmod(tile, nr * nc)
                 first = t // (8 * nc) * 8
                 group_rows, within = min(8, nr - first), t % (8 * nc)
-                r, c = (first + within % group_rows) * 64, (within // group_rows) * 128
-                rr, cc = min(r + 64, op.m), min(c + 128, op.n)
+                r, c = (first + within % group_rows) * tm, (within // group_rows) * tn
+                rr, cc = min(r + tm, op.m), min(c + tn, op.n)
                 splits = max(1, op.flags >> 8)
                 span = ((op.k + splits * 32 - 1) // (splits * 32)) * 32
                 k0, k1 = split * span, min((split + 1) * span, op.k)
@@ -67,9 +68,9 @@ def compile_region(program, begin, end):
                 write.append(rectangle(op.p[3], op.n, 0, 1, c, cc))
             else:
                 rect_columns = columns
-                nc = (columns + 127) // 128
-                r, c = tile // nc * 64, tile % nc * 128
-                rr, cc = min(r + 64, rows), min(c + 128, columns)
+                nc = (columns + tn - 1) // tn
+                r, c = tile // nc * tm, tile % nc * tn
+                rr, cc = min(r + tm, rows), min(c + tn, columns)
                 write.append(rectangle(dest, columns, r, rr, c, cc))
                 if op.code == Code.SUM_SPLITS:
                     for part in range(op.n):

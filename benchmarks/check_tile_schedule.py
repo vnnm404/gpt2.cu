@@ -69,14 +69,20 @@ def main():
             residual, out, stats = p.empty(x.shape), p.empty(x.shape), p.empty((19, 2))
             p.emit(Code.ADD, [x, y, residual], x.numel())
             p.emit(Code.NORM, [residual, w, bias, out, stats], 19, columns, tiles=19)
+            # Reuse the same shared pool for GEMM after the page barriers.
+            matrix = torch.randn((columns, 32), device="cuda") * .05
+            product = p.empty((19, 32))
+            p.matmul(out, matrix, product)
             p.upload()
             assert p.page_pipelines == 1
             expected = torch.nn.functional.layer_norm(x + y, (columns,), w, bias)
+            expected_product = expected @ matrix
             for workers in (1, 3, backend.capacity):
                 for _ in range(3):
                     p.run(workers=workers)
                     torch.testing.assert_close(residual, x + y, atol=0, rtol=0)
                     torch.testing.assert_close(out, expected, atol=3e-6, rtol=3e-5)
+                    torch.testing.assert_close(product, expected_product, atol=2e-5, rtol=3e-4)
             print(f'Page pipeline passed: columns={columns}, rows/page stream={page_rows}', flush=True)
 
 
